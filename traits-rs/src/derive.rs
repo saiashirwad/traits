@@ -4,6 +4,8 @@
 //! updates, covers, clarifies, or reconciles it. Generation only ever runs
 //! after approval and before any write.
 
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use futures::future::join_all;
 use indexmap::{IndexMap, IndexSet};
@@ -13,7 +15,7 @@ use serde_json::{Value, json};
 use crate::conflict::{self, FailReason, TraitConflict, answer_label};
 use crate::doc::{Trait, TraitName};
 use crate::error::ToolFailure;
-use crate::provider::{ClassifyQuestion, GenerateRequest, Models};
+use crate::provider::{ClassifyQuestion, GenerateRequest, LanguageModel, Models};
 use crate::store::TraitStore;
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -113,6 +115,15 @@ fn review_instructions(traits: &[Trait]) -> String {
 /// Serialize a trait into the canonical stored frontmatter plus Markdown body.
 fn serialize_trait(trait_value: &Trait) -> String {
     crate::doc::serialize(trait_value)
+}
+
+/// Language model accessor. Derivation needs generation only on the
+/// decompose/reconcile path, so a classify-only configuration still serves
+/// `check_traits` and fails here with a clear message.
+fn language(models: &Models) -> Result<&Arc<dyn LanguageModel>, ToolFailure> {
+    models.language.as_ref().ok_or_else(|| {
+        ToolFailure::ai("No language model configured; add a generate provider to traits.kdl")
+    })
 }
 
 /// Derive a stored trait from a proposal, consulting every existing trait.
@@ -337,7 +348,7 @@ async fn reconcile(
         schema: reconcile_schema(),
         strict: true,
     };
-    let response = models.language.generate_object(request).await?;
+    let response = language(models)?.generate_object(request).await?;
     let generated = serde_json::from_value::<GeneratedTraits>(response).map_err(|error| {
         ToolFailure::ai(format!("Language model returned invalid traits: {error}"))
     })?;
@@ -442,7 +453,7 @@ async fn check_decomposability(
         schema: decompose_schema(),
         strict: true,
     };
-    let response = models.language.generate_object(request).await?;
+    let response = language(models)?.generate_object(request).await?;
     let generated = serde_json::from_value::<DecomposedTraits>(response).map_err(|error| {
         ToolFailure::ai(format!(
             "Language model returned invalid decomposition: {error}"

@@ -64,13 +64,14 @@ pub trait LanguageModel: Send + Sync {
 
 pub struct Models {
     pub decision: Arc<dyn DecisionModel>,
-    pub language: Arc<dyn LanguageModel>,
+    /// Absent when no generate provider is configured. Tools that only
+    /// classify (check_traits) still work.
+    pub language: Option<Arc<dyn LanguageModel>>,
 }
 
 /// Build the decision and language models selected by configuration.
 pub fn build(config: &Config) -> Result<Models, ConfigError> {
     let classify = config.classify_provider()?;
-    let generate = config.generate_provider()?;
 
     let decision: Arc<dyn DecisionModel> = match classify.kind {
         ProviderKind::Typesafe => Arc::new(TypeSafeProvider {
@@ -94,24 +95,35 @@ pub fn build(config: &Config) -> Result<Models, ConfigError> {
         )),
     };
 
-    let language: Arc<dyn LanguageModel> = match generate.kind {
-        ProviderKind::Typesafe => {
-            return Err(ConfigError::new(
-                "TypeSafe does not provide a language model",
-            ));
+    let language: Option<Arc<dyn LanguageModel>> = match config
+        .generate
+        .provider
+        .as_ref()
+        .or(config.default_provider.as_ref())
+    {
+        None => None,
+        Some(name) => {
+            let generate = config
+                .provider(name)
+                .ok_or_else(|| ConfigError::new(format!("Unknown provider \"{name}\"")))?;
+            match generate.kind {
+                // TypeSafe is decision-only; treat it as "no language model"
+                // so classify-only configurations still serve check_traits.
+                ProviderKind::Typesafe => None,
+                _ => Some(Arc::new(OpenAiCompatProvider::new(
+                    build_client(generate.timeout_ms)?,
+                    resolve_base_url(generate)?,
+                    resolve_api_key(generate)?,
+                    generate.model.clone(),
+                    generate.kind,
+                    generate.json_mode,
+                    Some(config.generate.temperature.unwrap_or(0.2)),
+                    Some(config.generate.max_tokens.unwrap_or(8192)),
+                    generate.reasoning_effort.clone(),
+                    generate.headers.clone(),
+                ))),
+            }
         }
-        _ => Arc::new(OpenAiCompatProvider::new(
-            build_client(generate.timeout_ms)?,
-            resolve_base_url(generate)?,
-            resolve_api_key(generate)?,
-            generate.model.clone(),
-            generate.kind,
-            generate.json_mode,
-            Some(config.generate.temperature.unwrap_or(0.2)),
-            Some(config.generate.max_tokens.unwrap_or(8192)),
-            generate.reasoning_effort.clone(),
-            generate.headers.clone(),
-        )),
     };
 
     Ok(Models { decision, language })

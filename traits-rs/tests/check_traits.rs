@@ -143,7 +143,7 @@ fn models(violation: &[&str]) -> Models {
     });
     Models {
         decision,
-        language: Arc::new(NopLanguage),
+        language: Some(Arc::new(NopLanguage)),
     }
 }
 

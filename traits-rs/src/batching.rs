@@ -380,7 +380,7 @@ mod tests {
         let decision: Arc<dyn crate::provider::DecisionModel> = mock.clone();
         Models {
             decision,
-            language: Arc::new(NopLanguage),
+            language: Some(Arc::new(NopLanguage)),
         }
     }
 

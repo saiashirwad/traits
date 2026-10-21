@@ -153,8 +153,9 @@ pub async fn check(
                 _ => "<generated>".to_string(),
             };
             println!(
-                "{:?} {} at {location}",
-                finding.assessment.classification, finding.r#trait.name.0
+                "{} {} at {location}",
+                finding.assessment.classification.as_str(),
+                finding.r#trait.name.0
             );
         }
     }

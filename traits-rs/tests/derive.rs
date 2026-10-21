@@ -301,7 +301,7 @@ fn harness(
     Harness {
         models: Models {
             decision,
-            language: language_model,
+            language: Some(language_model),
         },
         store: MockStore::new(stored),
         language,

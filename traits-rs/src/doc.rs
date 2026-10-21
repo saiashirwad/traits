@@ -429,6 +429,17 @@ pub enum Classification {
     Inconclusive,
 }
 
+impl Classification {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Compliant => "compliant",
+            Self::Violation => "violation",
+            Self::NotApplicable => "not-applicable",
+            Self::Inconclusive => "inconclusive",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Probabilities {

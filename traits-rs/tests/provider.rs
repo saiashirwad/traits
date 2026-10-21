@@ -621,11 +621,8 @@ fn build_typesafe_generate_is_a_config_error() {
         provider_config("openai", ProviderKind::OpenAi, key_env, None),
         provider_config("typesafe", ProviderKind::Typesafe, key_env, None),
     );
-    let error = build(&config).err().expect("expected a config error");
-    assert_eq!(
-        error.to_string(),
-        "TypeSafe does not provide a language model"
-    );
+    let models = build(&config).expect("typesafe generate is ignored, not fatal");
+    assert!(models.language.is_none());
 }
 
 #[test]
