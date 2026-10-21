@@ -1,337 +1,140 @@
 # Set up Traits
 
-Traits is configured by your coding agent, following your project's conventions.
-Follow these instructions inside the consumer's Git checkout.
+Traits is configured by your coding agent. Follow these instructions inside the
+consumer's Git checkout.
 
-## Instructions for the agent
+## 1. Install the binary
 
-### 1. Respect consumer configuration before every package-manager operation
-
-**Every package-manager operation must respect the consumer's specific
-configuration—not merely their choice of package manager.** This applies to
-dependency checks, installs, updates, approvals, package runners, and skill
-installation, including the manual examples below.
-
-Read the project's instructions, `packageManager`, lockfiles, package manifests,
-and applicable project/workspace configuration before running commands. Examples
-include `pnpm-workspace.yaml`, `bunfig.toml`, `.npmrc`, and `.yarnrc.yml`;
-inspect the files relevant to the consumer rather than assuming default
-settings. Also review catalogs and existing agent configuration.
-
-Preserve the configured workspace scope, dependency placement, catalogs,
-overrides/resolutions, registries, authentication references, linker/hoisting
-settings, and install-script/trust policies. Respect configured version and
-release-age policies. Run commands from the appropriate workspace directory with
-the configured package-manager version; do not bypass policies or rewrite
-configuration to make installation succeed. If setup conflicts with those
-settings, explain the conflict and ask before changing them. Never expose
-registry credentials.
-
-Traits is distributed from this GitHub repository, not the npm registry. When
-the configured package manager supports Git subdirectories, install the `traits`
-subdirectory directly:
+Install once per machine:
 
 ```sh
-pnpm add "github:saiashirwad/traits#path:/traits"
+cargo install --path traits-rs
 ```
 
-For package managers without Git-subdirectory support, clone the repository
-outside the checkout and add the `traits` subdirectory as a local directory
-dependency instead:
+From a clone instead:
 
 ```sh
-git clone https://github.com/saiashirwad/traits.git ~/.cache/traits
+git clone https://github.com/crosshatch/traits ~/.cache/traits
+cargo install --path ~/.cache/traits/traits-rs
 ```
 
-Adapt the install command to the configured package manager, and do not request
-the `traits` package from the npm registry. `git -C ~/.cache/traits pull`
-updates a cloned checkout. Preserve the project's dependency-placement and
-install-script policies when adding the dependency.
+The binary lands in `~/.cargo/bin/traits`. Confirm it with `traits --version`.
+The project itself needs no Node, npm, or package installs.
 
-Ensure `traits`, `effect`, and `@effect/platform-node` are available to the
-checkout that runs Traits. Reuse compatible dependencies already supplied by the
-workspace; install only what is missing. Check resolution from the config's
-location, not just whether a dependency appears in a manifest. Do not introduce
-another lockfile, duplicate workspace dependencies, or silently upgrade an
-existing Effect version. Check the installed Traits package's peer requirements
-and ask before any compatibility migration.
+## 2. Ask about providers and models
 
-### 2. Ask about providers and models
+Ask the user which providers and models to use. Traits has two model roles:
 
-Before installing provider packages or writing `traits.ts`, ask the user which
-providers and models to use for decisions and language generation. Offer
-`@effect/ai-openrouter` as the default: one package and one API key supply both
-services. Install only the selected provider packages, using the project's
-dependency conventions and compatible versions.
+- `classify` answers relationship and assessment questions. TypeSafe returns
+  calibrated probability distributions; any OpenAI-compatible chat model also
+  works.
+- `generate` produces replacement traits during reconciliation. It needs
+  schema-constrained JSON output.
 
-```ts
-import {
-  OpenRouterClient,
-  OpenRouterDecisionModel,
-  OpenRouterLanguageModel
-} from "@effect/ai-openrouter"
-import { Config, Layer } from "effect"
-import type { TraitsConfig } from "traits"
+Write `traits.kdl` at the worktree root, or `~/.config/traits/config.kdl` for a
+machine-wide default. Project values override global values. Ask before
+replacing an existing `traits.kdl` and preserve unrelated settings.
 
-const layerClient = OpenRouterClient.layerConfig({
-  apiKey: Config.Redacted("OPENROUTER_API_KEY")
-})
+TypeSafe decisions with OpenCode Go generation:
 
-export default {
-  layerDecisionModel: OpenRouterDecisionModel.layer({
-    model: "~typesafe/jev-latest"
-  }).pipe(Layer.provide(layerClient)),
-  layerLanguageModel: OpenRouterLanguageModel.layer({
-    model: "openai/gpt-6.1-sol",
-    config: { strictJsonSchema: true, reasoning: { effort: "low" } }
-  }).pipe(Layer.provide(layerClient))
-} satisfies TraitsConfig
+```kdl
+version 1
+
+provider "typesafe" {
+    kind "typesafe"
+    model "jev-latest"
+    api-key-env "TYPESAFE_API_KEY"
+}
+
+provider "opencode" {
+    kind "opencode-go"
+    model "deepseek-v4.1-flash"
+    api-key-env "OPENCODE_API_KEY"
+}
+
+classify { provider "typesafe" }
+generate { provider "opencode" }
 ```
 
-Decision models run on OpenRouter's Decisions API, not chat completions, so
-choose them from
-`https://openrouter.ai/api/v1/models?output_modalities=decisions`. Choose
-language models that support structured output.
+DeepSeek for both roles:
 
-**OpenCode Go and TypeSafe.** OpenCode Go serves chat models through an
-OpenAI-compatible chat completions API, and TypeSafe supplies decision models.
-Use `@effect/ai-openai-compat` for language generation and `@effect/ai-typesafe`
-for decisions. OpenCode Go rejects requests without a stable
-`x-opencode-session` header, so add one in the client transform.
+```kdl
+version 1
 
-```ts
-import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai-compat"
-import { TypeSafeClient, TypeSafeDecisionModel } from "@effect/ai-typesafe"
-import { randomUUID } from "node:crypto"
-import { Config, Layer, Option, Schema as S } from "effect"
-import { HttpClient, HttpClientRequest } from "effect/http"
-import type { TraitsConfig } from "traits"
+provider "deepseek" {
+    kind "deepseek"
+    model "deepseek-flash"
+    api-key-env "DEEPSEEK_API_KEY"
+}
 
-const sessionId = randomUUID()
-
-const layerTypeSafe = TypeSafeClient.layerConfig({
-  apiKey: Config.Redacted("TYPESAFE_API_KEY")
-})
-
-const layerOpenCode = OpenAiClient.layerConfig({
-  apiKey: Config.Redacted("OPENCODE_API_KEY"),
-  apiUrl: Config.succeed("https://opencode.ai/inference/go/openai/v1"),
-  transformClient: HttpClient.mapRequest((request) => {
-    const withHeaders = request.pipe(
-      HttpClientRequest.setHeader("x-opencode-session", sessionId),
-      HttpClientRequest.setHeader("user-agent", "traits")
-    )
-    const body = withHeaders.body
-    if (body._tag !== "Uint8Array" || body.text === undefined)
-      return withHeaders
-    const payload = Option.getOrUndefined(
-      S.decodeOption(S.fromJsonString(S.Record(S.String, S.Unknown)))(body.text)
-    )
-    if (payload === undefined) return withHeaders
-    const format = Option.getOrUndefined(
-      S.decodeUnknownOption(
-        S.Struct({
-          type: S.Literal("json_schema"),
-          json_schema: S.Struct({ schema: S.Unknown })
-        })
-      )(payload.response_format)
-    )
-    if (format === undefined) return withHeaders
-    const messages = Option.getOrElse(
-      S.decodeUnknownOption(S.Array(S.Record(S.String, S.Unknown)))(
-        payload.messages
-      ),
-      () => []
-    )
-    return HttpClientRequest.bodyJsonUnsafe(withHeaders, {
-      ...payload,
-      response_format: { type: "json_object" },
-      messages: [
-        ...messages,
-        {
-          role: "system",
-          content: `Respond with only a JSON object matching this JSON Schema:\n${JSON.stringify(format.json_schema.schema)}`
-        }
-      ]
-    })
-  })
-})
-
-export default {
-  layerDecisionModel: TypeSafeDecisionModel.layer({
-    model: "jev-latest"
-  }).pipe(Layer.provide(layerTypeSafe)),
-  layerLanguageModel: OpenAiLanguageModel.layer({
-    model: "deepseek-v4.1-flash"
-  }).pipe(Layer.provide(layerOpenCode))
-} satisfies TraitsConfig
+default-provider "deepseek"
 ```
 
-Not every OpenCode Go model accepts `response_format` with a `json_schema`.
-`deepseek-v4.1-flash` rejects it, so the transform downgrades structured
-requests to `json_object` and appends the JSON Schema to the prompt. A model
-such as `deepseek-v4-pro` accepts `json_schema` directly, so it can keep only
-the header part of the transform. Verify structured output on the chosen model
-before relying on it.
+Provider kinds: `typesafe`, `opencode-go`, `deepseek`, `openrouter`, `openai`,
+`custom`. A custom provider requires `base-url`. Optional provider nodes are
+`json-mode` (`schema`, `object`, `prompt`), `reasoning-effort`, `timeout-ms`,
+and `header "name" "value"`. `classify` and `generate` accept `provider`,
+`temperature`, and `max-tokens`. Set `exclude` nodes to skip files, and
+`exclude-gitignored #false` to disable the Git file filter.
 
-**Advanced: separate providers.** Users who already hold provider keys or want
-direct provider access can use `@effect/ai-typesafe` for decisions and
-`@effect/ai-openai` or `@effect/ai-openai-compat` for language generation,
-depending on whether the endpoint implements the Responses or chat completions
-API. Other Effect providers also work. Consult current Effect provider
-documentation and check that each choice supplies the required `DecisionModel`
-or `LanguageModel` service.
+## 3. Keep credentials private
 
-### 3. Configure the current checkout
+Each provider names the environment variable holding its key. Use the MCP
+process environment or a Git-ignored `.env` at the checkout root. Never ask for
+secret values in chat, print them, or commit them.
 
-Create `traits.ts` at the current Git worktree root. Import `TraitsConfig` from
-`traits` and use `export default { ... } satisfies TraitsConfig`. Build
-`layerDecisionModel` and `layerLanguageModel` from the selected providers and
-models, checking their installed APIs. Preserve existing configuration and ask
-before replacing it. The selected providers determine the config's imports and
-model layers.
+Precedence: process environment, then the worktree `.env`, then the main
+checkout's `.env`. Reconnect the server after changing credentials.
 
-Git-ignored files are excluded by default. Explicit `excludes` can omit other
-files; use patterns such as `**/dist/**` and `node_modules/**`. Keep the default
-Git filter unless the user requests otherwise.
-
-### 4. Keep credentials private
-
-Explain which credentials the selected providers require. The OpenRouter default
-uses `OPENROUTER_API_KEY`; the separate TypeSafe, OpenAI, and OpenCode Go
-providers use `TYPESAFE_API_KEY`, `OPENAI_API_KEY`, and `OPENCODE_API_KEY`. Use
-the MCP process environment or a Git-ignored `.env` at the checkout root. Check
-that the file is ignored before writing secrets; never request secret values in
-chat, print them, or commit them.
-
-Process environment values take precedence, followed by the worktree's `.env`,
-then the main checkout's `.env`. Reconnect the server after changing
-credentials.
-
-### 5. Install the skill where the current agent discovers it
-
-Identify the coding agent performing setup and default to configuring that
-agent. Ask if its identity is unclear or the user wants additional agents
-configured. Install the Traits package's bundled skill
-(`skills/traits/SKILL.md`) in the project-local skill directory that the current
-agent actually discovers—for example, `.agents/skills/traits/SKILL.md` for
-OpenCode or `.claude/skills/traits/SKILL.md` for Claude Code. For other agents,
-consult their current documentation and project configuration rather than
-assuming a shared path. Preserve customizations and avoid duplicate copies.
-
-Prefer native dependency-linked skills when the package manager supports them,
-ensuring its targets include the current agent's skill directory. Otherwise use
-the skills CLI with the installed package as its source and explicit agent
-selection: agent-run subprocesses may skip the TUI. Verify that the skill is
-discoverable by the current agent, not merely copied somewhere in the checkout.
-
-For example, after a local installation, targeting Claude Code:
+## 4. Install the skill
 
 ```sh
-npx --yes skills add ./node_modules/traits --skill traits --agent claude-code
+traits skill install --agent project
 ```
 
-Adapt the package runner, source path, and agent name to the project. Do not
-pass the skills CLI's `--yes` flag before reviewing any overwrite plan with the
-user. Its installation is a snapshot; rerun after updating Traits.
+For other agents use `--agent opencode`, `--agent claude`, or `--agent all`.
+The skill teaches the agent when to propose traits and how to run checks.
 
-### 6. Connect and verify
+## 5. Connect and verify
 
-Merge a local Traits MCP server into the selected agents' existing settings,
-preserving other servers. Consult the agent's current configuration format. Use
-the project's package runner to launch the installed Traits CLI, with this
-checkout root as the working directory. The package-manager-independent command
-is `node node_modules/traits/bin.js`; `pnpm exec traits`, `npm exec traits`, and
-`yarn traits` also work. For a source checkout that is not installed as a
-dependency, run `node <checkout>/traits/bin.js`.
+Add the server to the agent's MCP configuration, preserving other servers:
 
-Verify config imports and provider compatibility. When credentials are
-available, connect the server and confirm `derive_trait` and `check_traits` are
-exposed, and that the agent discovers the skill. Report manual
-credential/reconnection steps and blocked checks without claiming setup passed.
-Do not create a trait merely to test installation.
+```json
+{ "mcp": { "servers": { "traits": { "type": "local", "command": ["traits"] } } } }
+```
+
+Run `traits config check` from the worktree root. It prints the resolved
+providers and warns about missing keys.
+
+When credentials are available, connect the server and confirm `derive_trait`
+and `check_traits` are exposed. Do not create a trait merely to test the
+installation.
 
 ## Troubleshooting
 
-### Dependency-linked skills
+### Configuration failures
 
-With pnpm 12.11+, install Traits using the project's conventions, then use
-`pnpm approve` to review and approve its skills. pnpm links skills from the
-installed package, keeping them aligned with updates and removing links when
-approval or the dependency is removed. It targets existing agent skill
-directories or the running agent's directory. If needed, configure targets
-explicitly:
+The server starts even when configuration or providers fail. Both tools stay
+listed and return the diagnostic plus recovery instructions. Fix the reported
+error, restart the server, and retry with the same arguments.
 
-```yaml
-# pnpm-workspace.yaml
-skills:
-  dirs:
-    - .agents/skills
-    - .claude/skills
-```
+### Stored trait parse failures
 
-An approved skill without a target makes installation fail. `pnpm dlx` and
-global installs do not natively link skills. Other package managers can use the
-skills CLI as described above. Older Traits versions copied the skill into
-`.agents/skills/traits`; back up customizations and avoid loading that copy
-alongside a package-managed skill.
+Tools return `TraitParseError` with the path and diagnostic instead of stopping
+the server. Ask the developer before repairing files, and preserve names,
+requirements, applicability, examples, and context. Retry after fixing the
+files; no restart is needed.
 
-### File filtering
+### Reconciliation fails
 
-Ignore rules refresh on every check. Untracked files do not need to be added to
-Git to be evaluated; tracked files remain eligible even if an ignore pattern
-matches them. Set `excludeGitignored: false` in `traits.ts` to disable the
-filter, including for files outside the checkout. Explicit `excludes` still
-apply. Git failures fail the check rather than bypass filtering.
+Reconciliation uses the configured `generate` model with schema-constrained
+JSON. A failure usually means the provider returned plain text instead of JSON.
+Check `json-mode`: `object` appends the schema to the prompt and works with
+DeepSeek-backed models; `schema` uses native `response_format`. OpenCode Go
+rejects `json_schema` for its DeepSeek models, so `object` is the default there.
 
-### Startup failures
+### Checks return nothing
 
-Configuration and providers initialize when the MCP server starts. If setup
-fails, the connection stays alive with fallback `derive_trait` and
-`check_traits` tools using the normal descriptions and parameters. Either tool
-returns the original error diagnostics. Surface the failure, fix the reported
-error, and restart the Traits MCP server to load the corrected setup. Then retry
-the same operation; keep any trait proposal pending and retry its derivation
-with identical arguments. Diagnostics include the full Effect cause and may
-contain sensitive values embedded in errors; do not paste credentials into chat.
-Expected tool failures use MCP error results; unexpected runtime defects receive
-a generic internal error response.
-
-### Stored trait parsing fails
-
-If a stored trait cannot be parsed, tools return `TraitParseError` with the file
-path and original diagnostic instead of stopping the server. Update all stored
-traits to the format/schema of the currently installed `traits` package: inspect
-its `Trait` schema and `serialize` format, preserving the rules and metadata.
-Retry after fixing the files; no server restart is needed. A failed check is not
-a clean review, and no automatic migration is performed.
-
-### Reconciliation fails after approval
-
-Conflict reconciliation and trait decomposition use the configured
-`LanguageModel` to generate schema-validated JSON. A
-`LanguageModel.generateObject` / `StructuredOutputError` can mean the provider
-returned plain text instead of JSON; it does not necessarily indicate an
-approval-form failure. Generation completes before replacements are written or
-originals are removed.
-
-When using `@effect/ai-openrouter`, check that strict structured output is
-enabled in the language-model configuration, alongside any existing options:
-
-```ts
-OpenRouterLanguageModel.layer({
-  model: "openai/gpt-6.1-sol",
-  config: { strictJsonSchema: true, reasoning: { effort: "low" } }
-})
-```
-
-Use a model and route that support structured output. Traits also explicitly
-describes the required JSON shape in its generation prompts, but provider-side
-enforcement remains preferable. No changes to the decision-model configuration
-are required for this setting.
-
-When using `@effect/ai-openai-compat`, confirm that the endpoint accepts
-`response_format` with a `json_schema`. OpenCode Go returns a 400 for
-`deepseek-v4.1-flash`, which requires the `json_object` transform described in
-the provider setup; other models accept `json_schema` directly. A missing
-`x-opencode-session` header also produces a 400 before generation starts.
+An empty result means no failures for the selected files and traits. Check the
+selection: unmatched patterns select no files, an empty trait store checks
+nothing, and Git-ignored files are excluded by default.

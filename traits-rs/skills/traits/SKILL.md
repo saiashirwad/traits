@@ -3,8 +3,8 @@ name: traits
 description: >-
   Use when the user corrects an approach, expresses a reusable coding
   preference, approves an alternative idiom, or asks to remember a convention;
-  when reconciling conflicting traits; and after generating or editing
-  TypeScript files or before committing them.
+  when reconciling conflicting traits; and after generating or editing source
+  files or before committing them.
 ---
 
 # Traits
@@ -234,7 +234,7 @@ project files.
 1. Before editing, read the stored trait bodies and identify which apply to the
    planned work. Do not rely on filenames, remembered summaries, or examples
    alone; preserve each rule's scope and exceptions.
-2. Track every TypeScript file you generate or modify, including files changed
+2. Track every source file you generate or modify, including files changed
    while fixing findings. Review the final on-disk contents, not an earlier
    version or only the initial set of files.
 3. Independently inspect each changed section against every applicable trait. An
@@ -247,7 +247,7 @@ project files.
    parameter destructuring, manually constructed tagged-union members, wrapped
    schema modifiers, and misplaced imports when their traits apply. Searches
    support review; a lack of matches is not proof that every trait is satisfied.
-5. Call `check_traits` on all changed TypeScript files after the latest edits.
+5. Call `check_traits` on all changed source files after the latest edits.
    Before a commit or PR, omit `traitNames` so every stored trait is checked;
    focused checks supplement rather than replace that final review.
 6. Inspect findings, fix confirmed violations, and repeat direct inspection,
@@ -283,7 +283,7 @@ their preference. Respect existing justified exceptions during manual review.
 
 ### Tool behavior and remediation
 
-- After generating or editing TypeScript files, select those files and call
+- After generating or editing source files, select those files and call
   `check_traits({ include: files })`.
 - After creating, updating, or resolving traits, run the required post-save
   trait checks across all eligible project-owned files with the saved trait
@@ -295,11 +295,11 @@ their preference. Respect existing justified exceptions during manual review.
   working directory. Overlapping matches are deduplicated; unmatched patterns
   select no files. Use `traits/**/*.ts` rather than a bare directory. Glob
   traversal always excludes dependencies, Git metadata, and nested worktrees.
-  `TraitsConfig.excludes` adds filenames or native filesystem glob patterns,
-  relative to the directory containing `traits.ts` or absolute. Use
-  `directory/**` to exclude a subtree; bare directories are not expanded
-  automatically. Escape glob characters in literal filenames using native glob
-  syntax. This repository configures `repos/**` and `**/dist/**` in `traits.ts`.
+  `exclude` entries in `traits.kdl` add filenames or native filesystem glob
+  patterns, relative to the worktree root or absolute. Use `directory/**` to
+  exclude a subtree; bare directories are not expanded automatically. Escape
+  glob characters in literal filenames using native glob syntax. This
+  repository configures `repos/**` in `traits.kdl`.
   No custom path classification or glob expansion semantics are imposed.
 - Assess only project-owned source and relevant authored configuration or
   documentation. For whole-project trait checks, prefer an explicit project-file
@@ -355,22 +355,18 @@ reporting. When asked for audit details, distinguish confirmed, unresolved, and
 rejected findings and give the rejection rationale. Quiet reporting is not
 skipped remediation or lost signal.
 
-- Before committing or opening a PR, review the changed TypeScript files against
+- Before committing or opening a PR, review the changed files against
   all traits. An empty result means no failures for the selection; empty
   selections, unmatched patterns, or an empty trait store perform no
   assessments.
 
 ## Operation
 
-The CLI launcher installs project dependencies in its current directory before
-importing the MCP server. Run it from the checkout/workspace root. It selects
-the package manager from `package.json#packageManager` or an unambiguous
-lockfile; the selected executable must be on PATH. Installation preserves
-lockfiles but can execute lifecycle scripts, so only launch in trusted
-checkouts. Allow enough MCP startup time for a cold install and avoid
-simultaneous installations in the same worktree. During development, use
-`node traits/bin.ts` with a Node version supporting native TypeScript execution;
-pass server flags after the filename.
+`traits` is a single Rust binary installed once, for example with
+`cargo install --path traits-rs`. It runs the MCP server over stdio from the
+checkout root, reads `traits.kdl` from the worktree root, and falls back to
+`~/.config/traits/config.kdl`. It installs nothing into the project. Run
+`traits config check` to validate providers and credentials.
 
 Surface tool failures; never treat a failed operation as a successful save or
 review. Error diagnostics may contain sensitive information. Never ask for
@@ -414,44 +410,27 @@ performed by the server.
 Git-ignored files are excluded by default, with ignore rules refreshed on every
 check. Untracked files do not need to be added to Git to be evaluated. Tracked
 files stay eligible even if ignore rules match them. Set
-`excludeGitignored: false` in `traits.ts` to disable this filter; explicit
+`exclude-gitignored #false` in `traits.kdl` to disable this filter; explicit
 excludes still apply. Git failures fail checks.
 
 For setup, follow the canonical guide at
-https://github.com/crosshatch/traits/blob/main/SETUP.md. Respect the consumer's
-package manager and workspace dependency conventions, ask about providers and
+https://github.com/crosshatch/traits/blob/main/SETUP.md. Ask about providers and
 models before writing configuration, and preserve existing settings. The guide
-covers dependencies, credentials, skill installation, MCP connection, and
-troubleshooting. The agent creates traits.ts using the selected providers; there
-is no init command. Discover the connected server's `derive_trait` and
-`check_traits` tools through the client's tool catalog.
+covers installation, credentials, skill installation, MCP connection, and
+troubleshooting. `traits init` writes a starter `traits.kdl`. Discover the
+connected server's `derive_trait` and `check_traits` tools through the client's
+tool catalog.
 
-The CLI's configuration layer loads and validates the default-exported object
-from repository-root `traits.ts`. Import the `TraitsConfig` type from `traits`
-and use `export default { ... } satisfies TraitsConfig`. Specify
-`layerDecisionModel` and `layerLanguageModel`; `excludes` is optional. The CLI
-supplies platform/HTTP services. Storage remains local and has no source
-configuration. The recommended configuration uses OpenRouter for both decisions
-and generation, requiring only `OPENROUTER_API_KEY`; separate TypeSafe and
-OpenAI providers use `TYPESAFE_API_KEY` and `OPENAI_API_KEY`. Configuration
-precedence is process environment, worktree-root `.env`, then main-checkout
-`.env`. Reconnect the MCP server after changing credentials. A failed model
-request is an incomplete review, not a pass.
+The server reads `traits.kdl` from the worktree root, merged over
+`~/.config/traits/config.kdl`. Providers name a `kind` (`typesafe`,
+`opencode-go`, `deepseek`, `openrouter`, `openai`, `custom`), a `model`, and the
+environment variable holding the key (`api-key-env`). `classify` and `generate`
+select providers for decisions and generation; a classify-only configuration
+supports checks but not reconciliation. Configuration precedence is process
+environment, worktree-root `.env`, then main-checkout `.env`. Reconnect the MCP
+server after changing credentials. A failed model request is an incomplete
+review, not a pass.
 
-The project MCP command leaves telemetry disabled. For optional OTLP telemetry,
-launch with `npx traits --otlp-endpoint http://127.0.0.1:4318`. The flag is an
-OTLP/HTTP collector base URL; traces and logs go to `/v1/traces` and `/v1/logs`
-beneath it using JSON, with service name `traits` and the package version.
-Metrics are not exported. Omit the flag to disable exports. URLs must use
-HTTP(S). Base paths and query parameters are preserved; fragments are ignored.
-Avoid credentials in command-line URLs. Stderr logging remains enabled; stdout
-stays reserved for MCP.
-
-The CLI does not start a collector or persist telemetry locally. Configure the
-collector's storage, rotation, retention, and access controls separately. Use a
-loopback collector for local debugging and read its configured output files; do
-not assume an output directory exists. Treat telemetry as potentially sensitive:
-spans and logs can include file paths and error text. No full trait bodies,
-source bodies, or authorization headers are intentionally attached by this
-integration, but that is not a blanket redaction guarantee. Do not publish
-collector output without inspection and redaction.
+The server writes logs to stderr and does not export telemetry. Stdout stays
+reserved for MCP. Trait bodies and source text are sent to the configured model
+providers as part of classification and generation.
