@@ -39,6 +39,7 @@ Until the crate is published, install from a clone. The binary lands in
 cd your-repo
 traits init             # writes traits.kdl and creates .agents/traits/
 traits config check     # validates providers and credentials
+traits config check --live   # sends one tiny request per role
 ```
 
 `traits.kdl` names the providers and models to use. [SETUP.md](SETUP.md) has
@@ -103,15 +104,15 @@ traits skill install --agent project
 
 ## CLI
 
-| Command                                                                               | Purpose                              |
-| ------------------------------------------------------------------------------------- | ------------------------------------ |
-| `traits`                                                                              | MCP stdio server when stdin is piped |
-| `traits serve`                                                                        | MCP stdio server                     |
-| `traits init [--force]`                                                               | Starter `traits.kdl` and store       |
-| `traits check [patterns] [--trait NAME] [--circumstances TEXT] [--json] [--no-cache]` | Assess files; exits 1 on violations  |
-| `traits trait ls`, `show NAME`, `rm NAME`                                             | Inspect the store                    |
-| `traits config check`                                                                 | Validate the resolved configuration  |
-| `traits skill install --agent project\|opencode\|claude\|all`                         | Write the agent skill                |
+| Command                                                                               | Purpose                                   |
+| ------------------------------------------------------------------------------------- | ----------------------------------------- |
+| `traits`                                                                              | MCP stdio server when stdin is piped      |
+| `traits serve`                                                                        | MCP stdio server                          |
+| `traits init [--force]`                                                               | Starter `traits.kdl` and store            |
+| `traits check [patterns] [--trait NAME] [--circumstances TEXT] [--json] [--no-cache]` | Assess files; exits 1 on violations       |
+| `traits trait ls`, `show NAME`, `rm NAME`                                             | Inspect the store                         |
+| `traits config check [--live]`                                                        | Validate config; `--live` pings each role |
+| `traits skill install --agent project\|opencode\|claude\|all`                         | Write the agent skill                     |
 
 ## Repository layout
 

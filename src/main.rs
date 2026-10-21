@@ -76,7 +76,11 @@ enum TraitCommand {
 #[derive(Subcommand)]
 enum ConfigCommand {
     /// Validate the resolved configuration
-    Check,
+    Check {
+        /// Send one tiny request per configured role
+        #[arg(long)]
+        live: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -121,7 +125,7 @@ async fn main() -> ExitCode {
             TraitCommand::Rm { name } => commands::trait_rm(config, &name).await.map(|_| 0),
         },
         Some(Command::Config { command }) => match command {
-            ConfigCommand::Check => commands::config_check(config).map(|_| 0),
+            ConfigCommand::Check { live } => commands::config_check(config, live).await,
         },
         Some(Command::Skill { command }) => match command {
             SkillCommand::Install { agent } => commands::skill_install(&agent).map(|_| 0),

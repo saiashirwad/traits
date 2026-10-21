@@ -1,13 +1,16 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use rmcp::ServiceExt;
+use serde_json::json;
 
 use crate::batching::check_traits;
-use crate::config;
+use crate::config::{self, ProviderConfig};
 use crate::doc::TraitName;
+use crate::error::ToolFailure;
 use crate::mcp::{Ready, ServerState, TraitsServer};
-use crate::provider;
+use crate::provider::{self, Choice, Criterion, GenerateRequest};
 use crate::store::{FileSystemStore, TraitStore};
 
 const STARTER_CONFIG: &str = r#"version 1
@@ -212,9 +215,10 @@ pub async fn trait_rm(config_path: Option<&Path>, name: &str) -> Result<(), Stri
     Ok(())
 }
 
-pub fn config_check(config_path: Option<&Path>) -> Result<(), String> {
+pub async fn config_check(config_path: Option<&Path>, live: bool) -> Result<u8, String> {
     let cwd = cwd()?;
     let config = config::load(&cwd, config_path).map_err(|error| format!("{error}"))?;
+    load_dotenv(&config.config_root);
     println!("root: {}", config.config_root.display());
     println!("store: {}", config.store.display());
     println!("concurrency: {}", config.concurrency);
@@ -241,7 +245,98 @@ pub fn config_check(config_path: Option<&Path>) -> Result<(), String> {
     if config.providers.is_empty() {
         println!("no providers configured");
     }
-    Ok(())
+    if !live {
+        return Ok(0);
+    }
+
+    let models = provider::build(&config).map_err(|error| format!("{error}"))?;
+    let state = json!({ "text": "ping" });
+    let classify = timed(provider::ask::<Ping>(
+        models.decision.as_ref(),
+        &state,
+        "ping",
+        "Answer yes when the text is ping.",
+    ));
+    let generate = async {
+        match &models.language {
+            Some(language) => Some(
+                timed(language.generate_object(GenerateRequest {
+                    system: "Reply with JSON only.".to_string(),
+                    user: "Return an object whose ok field is true.".to_string(),
+                    schema_name: "ping".to_string(),
+                    schema: json!({
+                        "type": "object",
+                        "properties": { "ok": { "type": "boolean" } },
+                        "required": ["ok"],
+                        "additionalProperties": false
+                    }),
+                    strict: true,
+                }))
+                .await,
+            ),
+            None => None,
+        }
+    };
+    let (classify, generate) = tokio::join!(classify, generate);
+
+    let outcomes = [
+        config
+            .classify
+            .provider
+            .as_ref()
+            .map(|provider| ("classify", provider, classify)),
+        config
+            .generate
+            .provider
+            .as_ref()
+            .zip(generate)
+            .map(|(provider, outcome)| ("generate", provider, outcome)),
+    ];
+    let mut failed = false;
+    for (role, provider, outcome) in outcomes.into_iter().flatten() {
+        failed |= outcome.is_err();
+        println!("{}", liveness(role, provider, &outcome));
+    }
+    Ok(u8::from(failed))
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Ping {
+    Yes,
+    No,
+}
+
+impl Choice for Ping {
+    const ALL: &'static [Self] = &[Self::Yes, Self::No];
+    const CRITERIA: &'static [Criterion] = &[
+        Criterion {
+            label: "yes",
+            description: "The text is ping.",
+        },
+        Criterion {
+            label: "no",
+            description: "The text is anything else.",
+        },
+    ];
+}
+
+async fn timed<T>(
+    request: impl Future<Output = Result<T, ToolFailure>>,
+) -> Result<Duration, ToolFailure> {
+    let start = Instant::now();
+    request.await.map(|_| start.elapsed())
+}
+
+fn liveness(
+    role: &str,
+    provider: &ProviderConfig,
+    outcome: &Result<Duration, ToolFailure>,
+) -> String {
+    let status = match outcome {
+        Ok(latency) => format!("ok in {}ms", latency.as_millis()),
+        Err(failure) => format!("failed: {}", failure.message()),
+    };
+    format!("{role} {} ({}): {status}", provider.name, provider.model)
 }
 
 pub fn skill_install(agent: &str) -> Result<(), String> {

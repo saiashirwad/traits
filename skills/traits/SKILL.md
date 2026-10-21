@@ -366,7 +366,7 @@ skipped remediation or lost signal.
 `cargo install --path .` from a clone of this repository. It runs the MCP server over stdio from the
 checkout root, reads `traits.kdl` from the worktree root, and falls back to
 `~/.config/traits/config.kdl`. It installs nothing into the project. Run
-`traits config check` to validate providers and credentials.
+`traits config check --live` to validate providers and credentials.
 
 Surface tool failures; never treat a failed operation as a successful save or
 review. Error diagnostics may contain sensitive information. Never ask for

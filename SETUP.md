@@ -104,7 +104,8 @@ Add the server to the agent's MCP configuration, preserving other servers:
 ```
 
 Run `traits config check` from the worktree root. It prints the resolved
-providers and warns about missing keys.
+providers and warns about missing keys. Add `--live` to send one tiny request
+per role and print its latency or error.
 
 When credentials are available, connect the server and confirm `derive_trait`
 and `check_traits` are exposed. Do not create a trait merely to test the
