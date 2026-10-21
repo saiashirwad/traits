@@ -1,6 +1,5 @@
 version 1
 concurrency 4
-exclude "repos/**"
 
 provider "typesafe" {
     kind "typesafe"

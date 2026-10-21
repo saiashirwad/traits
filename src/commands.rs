@@ -29,7 +29,6 @@ default-provider "opencode"
 // concurrency 4
 // exclude-gitignored #true
 // cache #true
-// exclude "repos/**"
 // exclude "**/dist/**"
 "#;
 

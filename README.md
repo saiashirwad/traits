@@ -57,7 +57,7 @@ the environment variable named by `api-key-env`: the process environment, then
 ```kdl
 version 1
 concurrency 4
-exclude "repos/**"
+exclude "**/dist/**"
 
 provider "typesafe" {
     kind "typesafe"
@@ -118,15 +118,14 @@ traits skill install --agent project
 
 ## Repository layout
 
-| Path                    | Contents                                                   |
-| ----------------------- | ---------------------------------------------------------- |
-| `src/`, `tests/`        | The Rust crate and its tests                               |
-| `src/prompts/`          | MCP instructions and tool descriptions                     |
-| `skills/traits/`        | The bundled agent skill                                    |
-| `traits.kdl`            | This repository's configuration                            |
-| `.agents/traits/`       | This repository's trait store                              |
-| `.agents/skills/traits` | Symlink to the bundled skill                               |
-| `repos/`                | Reference checkouts (Git submodules, excluded from checks) |
+| Path                    | Contents                               |
+| ----------------------- | -------------------------------------- |
+| `src/`, `tests/`        | The Rust crate and its tests           |
+| `src/prompts/`          | MCP instructions and tool descriptions |
+| `skills/traits/`        | The bundled agent skill                |
+| `traits.kdl`            | This repository's configuration        |
+| `.agents/traits/`       | This repository's trait store          |
+| `.agents/skills/traits` | Symlink to the bundled skill           |
 
 ## Modules
 

@@ -24,14 +24,6 @@ All paths below are relative to the repository root.
 - Bootstrap with `CLOUDFLARE_ACCOUNT_ID=<account-id> pnpm exec alchemy deploy bootstrap.ts --stage bootstrap`, using an Alchemy profile authorized to create Cloudflare account tokens and manage GitHub Actions secrets/variables.
 - Deployment steps must expose `CLOUDFLARE_API_TOKEN` from `${{ secrets.CLOUDFLARE_API_TOKEN }}` and `CLOUDFLARE_ACCOUNT_ID` from `${{ vars.CLOUDFLARE_ACCOUNT_ID }}`.
 
-## Reference Repositories
-
-- Treat submodules under `repos/` as read-only unless explicitly asked to modify them.
-- Prefer relevant source, tests, and examples over guesses or web searches.
-- Import normal package dependencies, never vendored source.
-- For Effect patterns and API design, consult `repos/Effect-TS/effect/`.
-- For Alchemy application and deployment patterns, consult `repos/alchemy-run/alchemy-effect/examples/`.
-
 ## Effect
 
 - Use `Effect.fn` with a concise span name for reusable Effect operations: `Effect.fn("<name>")(function* () { ... })` rather than `Effect.fn(function* () { ... })`. Retain `Effect.gen` for inline effect values and initialization.

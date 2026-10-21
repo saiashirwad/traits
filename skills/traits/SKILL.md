@@ -303,8 +303,7 @@ their preference. Respect existing justified exceptions during manual review.
   `exclude` entries in `traits.kdl` add filenames or native filesystem glob
   patterns, relative to the worktree root or absolute. Use `directory/**` to
   exclude a subtree; bare directories are not expanded automatically. Escape
-  glob characters in literal filenames using native glob syntax. This
-  repository configures `repos/**` in `traits.kdl`.
+  glob characters in literal filenames using native glob syntax.
   No custom path classification or glob expansion semantics are imposed.
 - Assess only project-owned source and relevant authored configuration or
   documentation. For whole-project trait checks, prefer an explicit project-file
