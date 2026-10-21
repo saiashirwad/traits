@@ -6,8 +6,11 @@ requirement: When traversing a collection to perform Effects and collect
   results, prefer Effect.forEach over a for loop that pushes into a mutable
   accumulator array. Preserve intended ordering, filtering, and concurrency
   semantics.
-applicability: |-
-  File types or languages: text/typescript, text/tsx.
+paths:
+  - "*.ts"
+  - "*.mts"
+  - "*.cts"
+  - "*.tsx"
 ---
 ```diff
 -const results = []

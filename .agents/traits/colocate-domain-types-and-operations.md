@@ -9,7 +9,10 @@ requirement: "Keep each core domain type in its own module and export the
   operations inline."
 applicability: |-
   Applies when introducing or organizing core domain types and their operations.
-  File types or languages: text/typescript.
+paths:
+  - "*.ts"
+  - "*.mts"
+  - "*.cts"
 ---
 ```diff
 -import { TraitExpression } from "./TraitExpression.ts"

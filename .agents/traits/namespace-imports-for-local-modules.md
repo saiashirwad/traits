@@ -9,7 +9,15 @@ requirement: For local project modules, prefer namespace imports and qualified
   Trait.Trait, and Trait.TraitName.
 applicability: |-
   Applies when importing more than two exports from a local project module or giving multiple local exports aliases with a shared module-name prefix.
-  File types or languages: text/typescript, text/tsx, text/javascript, text/jsx.
+paths:
+  - "*.ts"
+  - "*.mts"
+  - "*.cts"
+  - "*.tsx"
+  - "*.js"
+  - "*.mjs"
+  - "*.cjs"
+  - "*.jsx"
 ---
 ```diff
 -import { parse, serialize, Trait } from "./Trait.ts"

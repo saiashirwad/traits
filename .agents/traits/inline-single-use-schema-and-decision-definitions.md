@@ -10,8 +10,12 @@ requirement: "Prefer inlining single-use schemas, schema transcoder definitions,
   meaningful construction overhead."
 applicability: |-
   Applies when defining single-use schemas, transcoders, or lightweight Decision.make values.
-  File types or languages: text/typescript, text/tsx.
   Exception: When extracting a schema, transcoder, or Decision.make definition is needed for readability or justified by profiled construction overhead.
+paths:
+  - "*.ts"
+  - "*.mts"
+  - "*.cts"
+  - "*.tsx"
 ---
 ```diff
 -const inputSchema = S.Struct({ text: S.String }) // Used once, no meaningful boundary.

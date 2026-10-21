@@ -10,8 +10,15 @@ requirement: "When a function call returns a function that is immediately
   and when no data-first overload exists. It does not prohibit calling a
   previously stored function or using a genuine data-first overload such as
   `Array.map(items, f)`."
-applicability: |-
-  File types or languages: text/typescript, text/tsx, text/javascript, text/jsx.
+paths:
+  - "*.ts"
+  - "*.mts"
+  - "*.cts"
+  - "*.tsx"
+  - "*.js"
+  - "*.mjs"
+  - "*.cjs"
+  - "*.jsx"
 ---
 ```diff
 -const decoded = yield* S.decodeUnknownEffect(schema)(input)

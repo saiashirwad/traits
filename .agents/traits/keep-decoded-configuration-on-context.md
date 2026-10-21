@@ -10,7 +10,11 @@ requirement: When an Effect context exposes decoded configuration, keep the
   context fields.
 applicability: |-
   Applies when exposing decoded configuration and derived runtime values through an Effect context.
-  File types or languages: text/typescript, text/tsx.
+paths:
+  - "*.ts"
+  - "*.mts"
+  - "*.cts"
+  - "*.tsx"
 ---
 ```diff
 -return { concurrency: config.concurrency, semaphore }

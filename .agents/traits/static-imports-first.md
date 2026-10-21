@@ -8,7 +8,15 @@ requirement: 'Place all static import declarations at the top of a module,
   expressions may remain where needed.'
 applicability: |-
   Applies when adding or reorganizing static module imports.
-  File types or languages: text/typescript, text/tsx, text/javascript, text/jsx.
+paths:
+  - "*.ts"
+  - "*.mts"
+  - "*.cts"
+  - "*.tsx"
+  - "*.js"
+  - "*.mjs"
+  - "*.cjs"
+  - "*.jsx"
 ---
 ```diff
 -export const value = 1

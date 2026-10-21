@@ -10,7 +10,11 @@ requirement: 'Never manually implement retry or backoff logic. Use Effect’s
   filtering.'
 applicability: |-
   Applies when adding retry or backoff behavior to Effect operations.
-  File types or languages: text/typescript, text/tsx.
+paths:
+  - "*.ts"
+  - "*.mts"
+  - "*.cts"
+  - "*.tsx"
 ---
 ```diff
 -for (let attempt = 0; attempt < 3; attempt++) { /* retry request and sleep manually */ }

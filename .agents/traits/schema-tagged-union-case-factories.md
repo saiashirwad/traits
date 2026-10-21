@@ -7,7 +7,11 @@ requirement: 'Construct instances of Effect Schema tagged unions with their
   Union.cases.Fail.make({ reason }), not { _tag: "Fail", reason }.'
 applicability: |-
   Applies when constructing members of Effect Schema tagged unions.
-  File types or languages: text/typescript, text/tsx.
+paths:
+  - "*.ts"
+  - "*.mts"
+  - "*.cts"
+  - "*.tsx"
 ---
 ```diff
 -const outcome = { _tag: "Fail", reason }

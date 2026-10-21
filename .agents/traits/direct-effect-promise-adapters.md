@@ -8,7 +8,11 @@ requirement: "Use `Effect.promise` directly at Promise boundaries instead of
   `Effect.promise`."
 applicability: |-
   Applies when adapting Promise-returning operations to Effect.
-  File types or languages: text/typescript, text/tsx.
+paths:
+  - "*.ts"
+  - "*.mts"
+  - "*.cts"
+  - "*.tsx"
 ---
 ```diff
 -const result = fromPromise(() => client.run()) // Helper only wraps Effect.promise.

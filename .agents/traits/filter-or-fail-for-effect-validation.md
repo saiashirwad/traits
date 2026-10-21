@@ -6,8 +6,11 @@ requirement: When validating an Effect result only to fail on a predicate and
   otherwise continue, prefer Effect.filterOrFail in the effect’s pipe over
   yielding into a temporary variable and branching to raise an error. Preserve
   the existing error type and diagnostic details.
-applicability: |-
-  File types or languages: text/typescript, text/tsx.
+paths:
+  - "*.ts"
+  - "*.mts"
+  - "*.cts"
+  - "*.tsx"
 ---
 ```diff
 -const value = yield* load

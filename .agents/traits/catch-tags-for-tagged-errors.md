@@ -9,7 +9,11 @@ requirement: 'Always prefer Effect.catchTags over Effect.catchTag for
   error propagation behavior.'
 applicability: |-
   Applies when recovering from tagged Effect errors.
-  File types or languages: text/typescript, text/tsx.
+paths:
+  - "*.ts"
+  - "*.mts"
+  - "*.cts"
+  - "*.tsx"
 ---
 ```diff
 -Effect.catchTag("UnknownError", handler)

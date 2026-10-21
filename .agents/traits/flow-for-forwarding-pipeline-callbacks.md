@@ -12,7 +12,11 @@ requirement: Use flow to compose callbacks and function definitions that only
   or argument handling that flow would not preserve.
 applicability: |-
   Applies when a callback only forwards its argument through a pipe of transformations.
-  File types or languages: text/typescript, text/tsx.
+paths:
+  - "*.ts"
+  - "*.mts"
+  - "*.cts"
+  - "*.tsx"
 ---
 ```diff
 -const process = (input) => pipe(input, parse, build)

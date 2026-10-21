@@ -12,7 +12,11 @@ requirement: "In library code, distinguish internal invariant violations from
   it a defect."
 applicability: |-
   Applies when designing library error channels for validation or encoding of internally constructed data.
-  File types or languages: text/typescript, text/tsx.
+paths:
+  - "*.ts"
+  - "*.mts"
+  - "*.cts"
+  - "*.tsx"
 ---
 ```diff
 -return pipe(internallyConstructed, S.encodeEffect(schema))

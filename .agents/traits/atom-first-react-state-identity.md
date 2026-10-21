@@ -9,7 +9,8 @@ requirement: In React code using Effect reactivity atoms, prefer atom-first
   memoization.
 applicability: |-
   Applies when defining Effect reactivity atom ownership, identity, or Atom.family factories in React.
-  File types or languages: text/tsx.
+paths:
+  - "*.tsx"
 ---
 ```diff
 -import { useMemo } from "react"

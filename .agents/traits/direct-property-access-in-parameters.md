@@ -11,7 +11,15 @@ requirement: "Use direct property access rather than object destructuring in
   unaffected."
 applicability: |-
   Applies when declaring function, callback, or generator parameters that receive objects.
-  File types or languages: text/typescript, text/tsx, text/javascript, text/jsx.
+paths:
+  - "*.ts"
+  - "*.mts"
+  - "*.cts"
+  - "*.tsx"
+  - "*.js"
+  - "*.mjs"
+  - "*.cjs"
+  - "*.jsx"
 ---
 ```diff
 -const names = Array.map(items, ({ name }) => name)

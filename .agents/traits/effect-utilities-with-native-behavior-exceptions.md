@@ -12,8 +12,12 @@ requirement: "Except for inline comparisons and simple runtime checks, prefer
   `items.push(value)`, not copying and reassigning with `items =
   Array.append(items, value)`."
 applicability: |-
-  File types or languages: text/typescript, text/tsx.
   Exception: When all native utility choices under assessment are required to preserve behavior or lack a suitable Effect equivalent, including local mutations without an Effect mutation equivalent.
+paths:
+  - "*.ts"
+  - "*.mts"
+  - "*.cts"
+  - "*.tsx"
 ---
 ```diff
 -const names = items.map((item) => item.name)

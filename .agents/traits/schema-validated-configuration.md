@@ -13,7 +13,11 @@ requirement: "Validate configuration through Config.schema with appropriate
   constraining process exit codes or other externally supplied numbers."
 applicability: |-
   Applies when loading and validating configuration with Effect Config.
-  File types or languages: text/typescript, text/tsx.
+paths:
+  - "*.ts"
+  - "*.mts"
+  - "*.cts"
+  - "*.tsx"
 ---
 ```diff
 -const limit = Config.Number("LIMIT")

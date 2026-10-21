@@ -6,8 +6,11 @@ requirement: "Use Effect’s predefined constant effects rather than constructin
   equivalent successful effects: Effect.undefined, not
   Effect.succeed(undefined); Effect.void, not Effect.succeed(void 0). Apply this
   when a dedicated constant with the same semantics exists."
-applicability: |-
-  File types or languages: text/typescript, text/tsx.
+paths:
+  - "*.ts"
+  - "*.mts"
+  - "*.cts"
+  - "*.tsx"
 ---
 ```diff
 -const empty = Effect.succeed(undefined)

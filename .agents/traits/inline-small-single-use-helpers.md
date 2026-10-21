@@ -9,8 +9,16 @@ requirement: Prefer inlining small single-use helper logic into the operation
   defines a meaningful domain/API boundary. In React, inline into the relevant
   atom or Effect operation, not into component render or event handlers.
 applicability: |-
-  File types or languages: text/typescript, text/tsx, text/javascript, text/jsx.
   Exception: When helper extraction materially improves readability through naming or defines a meaningful domain or API boundary.
+paths:
+  - "*.ts"
+  - "*.mts"
+  - "*.cts"
+  - "*.tsx"
+  - "*.js"
+  - "*.mjs"
+  - "*.cjs"
+  - "*.jsx"
 ---
 ```diff
 -const getName = (item) => item.name // Trivial single-use helper.

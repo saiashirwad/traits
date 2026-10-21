@@ -11,7 +11,15 @@ requirement: Prefer namespace imports when multiple members form a cohesive
   API cohesion and call-site clarity, not whether the module is external.
 applicability: |-
   Applies when choosing between named and namespace imports
-  File types or languages: text/typescript, text/tsx, text/javascript, text/jsx.
+paths:
+  - "*.ts"
+  - "*.mts"
+  - "*.cts"
+  - "*.tsx"
+  - "*.js"
+  - "*.mjs"
+  - "*.cjs"
+  - "*.jsx"
 ---
 ```diff
 -import { parse as parseYaml, stringify as stringifyYaml } from "yaml"

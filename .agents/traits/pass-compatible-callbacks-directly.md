@@ -15,8 +15,16 @@ requirement: "Prefer passing a function directly as a callback when its
   reaching variadic path.resolve."
 applicability: |-
   Applies when passing callbacks or defining forwarding functions or service methods.
-  File types or languages: text/typescript, text/tsx, text/javascript, text/jsx.
   Exception: When a wrapper is necessary to control forwarded arguments or preserve the receiver.
+paths:
+  - "*.ts"
+  - "*.mts"
+  - "*.cts"
+  - "*.tsx"
+  - "*.js"
+  - "*.mjs"
+  - "*.cjs"
+  - "*.jsx"
 ---
 ```diff
 -const trimmed = effect.pipe(Effect.map((text) => String.trim(text)))

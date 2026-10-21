@@ -8,8 +8,11 @@ requirement: "Avoid yield* expressions inside function-call arguments in Effect
   ConfigProvider.orElse(provider, value))), not provider =
   ConfigProvider.orElse(provider, yield* load). If composing is unclear, yield
   into a local variable first."
-applicability: |-
-  File types or languages: text/typescript, text/tsx.
+paths:
+  - "*.ts"
+  - "*.mts"
+  - "*.cts"
+  - "*.tsx"
 ---
 ```diff
 -const result = transform(yield* load)

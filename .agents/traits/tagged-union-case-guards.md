@@ -8,7 +8,11 @@ requirement: 'Use tagged unions’ built-in case guards when testing or filterin
   value._tag === "Fail").'
 applicability: |-
   Applies when testing or filtering cases of tagged unions with built-in case guards.
-  File types or languages: text/typescript, text/tsx.
+paths:
+  - "*.ts"
+  - "*.mts"
+  - "*.cts"
+  - "*.tsx"
 ---
 ```diff
 -const failures = Array.filter(results, (result) => result._tag === "Fail")

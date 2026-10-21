@@ -9,8 +9,11 @@ requirement: 'In a React client entry point, when the application-owned HTML
   root element in the HTML; retain null handling for DOM elements whose presence
   is not guaranteed.'
 applicability: |-
-  File types or languages: text/tsx, text/jsx, text/html.
   Exception: When the DOM elements under assessment are not guaranteed to exist by application-owned HTML and therefore require null handling.
+paths:
+  - "*.tsx"
+  - "*.jsx"
+  - "*.html"
 ---
 ```diff
 -const root = document.getElementById("root")

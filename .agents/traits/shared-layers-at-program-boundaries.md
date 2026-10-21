@@ -12,8 +12,12 @@ requirement: "Provide shared, program-wide Effect layers at the outermost
   whose scope or configuration genuinely belongs to that operation."
 applicability: |-
   Applies when providing shared Effect service layers or choosing dependency scopes.
-  File types or languages: text/typescript, text/tsx.
   Exception: When every locally provided dependency under assessment has scope or configuration that genuinely belongs to that operation rather than being shared program-wide.
+paths:
+  - "*.ts"
+  - "*.mts"
+  - "*.cts"
+  - "*.tsx"
 ---
 ```diff
 -const query = operation.pipe(Effect.provide(Database.layer))

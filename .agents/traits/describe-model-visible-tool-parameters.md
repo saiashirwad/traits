@@ -11,7 +11,11 @@ requirement: 'For tools defined with `effect/ai`, every model-visible tool
   internal helper parameters.'
 applicability: |-
   Applies when defining model-visible parameter schemas for effect/ai tools.
-  File types or languages: text/typescript, text/tsx.
+paths:
+  - "*.ts"
+  - "*.mts"
+  - "*.cts"
+  - "*.tsx"
 ---
 ```diff
 -approved: S.Boolean.pipe(S.optional)

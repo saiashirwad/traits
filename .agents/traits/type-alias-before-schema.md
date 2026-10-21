@@ -8,7 +8,11 @@ requirement: "When extracting a schema’s static type, place the type alias
   it."
 applicability: |-
   Applies when extracting a static type from an Effect schema.
-  File types or languages: text/typescript, text/tsx.
+paths:
+  - "*.ts"
+  - "*.mts"
+  - "*.cts"
+  - "*.tsx"
 ---
 ```diff
 -export const User = S.Struct({ id: S.String })

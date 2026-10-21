@@ -14,8 +14,16 @@ requirement: "Use the Effect alternative for Node APIs in ordinary application
   bypass Effect in application code."
 applicability: |-
   Applies when accessing filesystem, paths, working directories, or child processes in application code or synchronous tooling boundaries.
-  File types or languages: text/typescript, text/tsx, text/javascript, text/jsx.
   Exception: When all native Node API usage under assessment is confined to synchronous tooling boundaries and is needed to preserve the framework's synchronous execution contract.
+paths:
+  - "*.ts"
+  - "*.mts"
+  - "*.cts"
+  - "*.tsx"
+  - "*.js"
+  - "*.mjs"
+  - "*.cjs"
+  - "*.jsx"
 ---
 ```diff
 -const text = await fs.readFile(file, "utf8")

@@ -9,7 +9,11 @@ requirement: For parameterless Effect operations, export an Effect value instead
   invoke it. Preserve tracing with Effect.withSpan when appropriate.
 applicability: |-
   Applies when exporting parameterless Effect operations.
-  File types or languages: text/typescript, text/tsx.
+paths:
+  - "*.ts"
+  - "*.mts"
+  - "*.cts"
+  - "*.tsx"
 ---
 ```diff
 -export const load = Effect.fn("load")(function* () { return yield* read.pipe(Effect.map(decode)) })

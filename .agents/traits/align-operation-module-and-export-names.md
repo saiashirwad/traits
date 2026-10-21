@@ -8,7 +8,15 @@ requirement: For operation-focused modules, keep the filename and primary export
   rather than retaining the old source name behind an import alias.
 applicability: |-
   Applies when naming or renaming an operation-focused module and its primary export.
-  File types or languages: text/typescript, text/tsx, text/javascript, text/jsx.
+paths:
+  - "*.ts"
+  - "*.mts"
+  - "*.cts"
+  - "*.tsx"
+  - "*.js"
+  - "*.mjs"
+  - "*.cjs"
+  - "*.jsx"
 ---
 ```diff
 -import { evaluate as check } from "./evaluate.ts"

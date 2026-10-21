@@ -12,7 +12,15 @@ requirement: "Do not use JavaScript try/catch in application code. Model
   intentional fallback behavior and let unhandled operational errors propagate."
 applicability: |-
   Applies when handling throwable synchronous operations or Promise failures in application code.
-  File types or languages: text/typescript, text/tsx, text/javascript, text/jsx.
+paths:
+  - "*.ts"
+  - "*.mts"
+  - "*.cts"
+  - "*.tsx"
+  - "*.js"
+  - "*.mjs"
+  - "*.cjs"
+  - "*.jsx"
 ---
 ```diff
 -try { return JSON.parse(text) } catch { return fallback }

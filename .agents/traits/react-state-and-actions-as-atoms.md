@@ -11,7 +11,8 @@ requirement: In React code, use Effect reactivity atoms instead of useState and
   lifecycle cleanup.
 applicability: |-
   Applies when defining React component state, event handlers, or asynchronous actions.
-  File types or languages: text/tsx.
+paths:
+  - "*.tsx"
 ---
 ```diff
 -const [count, setCount] = useState(0)

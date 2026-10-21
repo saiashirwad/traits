@@ -9,7 +9,11 @@ requirement: For schema-decoded configuration, express optional-field defaults
   defaulted fields remain optional.
 applicability: |-
   Applies when defining, decoding, or consuming schema-backed configuration with optional defaults.
-  File types or languages: text/typescript, text/tsx.
+paths:
+  - "*.ts"
+  - "*.mts"
+  - "*.cts"
+  - "*.tsx"
 ---
 ```diff
 -const limit = config.limit ?? 10

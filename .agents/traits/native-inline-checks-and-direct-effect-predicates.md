@@ -13,7 +13,11 @@ requirement: Prefer native syntax for inline comparisons and simple runtime
   required semantics.
 applicability: |-
   Applies when writing inline comparisons, simple runtime checks, or predicate stages in existing pipelines.
-  File types or languages: text/typescript, text/tsx.
+paths:
+  - "*.ts"
+  - "*.mts"
+  - "*.cts"
+  - "*.tsx"
 ---
 ```diff
 -if (Number.lessThanOrEqualTo(bounds.top, readingLine)) show()

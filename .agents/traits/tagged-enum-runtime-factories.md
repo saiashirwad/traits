@@ -10,7 +10,11 @@ requirement: "Every Effect Data.TaggedEnum type alias must be paired with a
   construction rules."
 applicability: |-
   Applies when declaring an Effect Data.TaggedEnum type alias.
-  File types or languages: text/typescript, text/tsx.
+paths:
+  - "*.ts"
+  - "*.mts"
+  - "*.cts"
+  - "*.tsx"
 ---
 ```diff
 -type Outcome = Data.TaggedEnum<{ Pass: {}; Fail: { reason: string } }>

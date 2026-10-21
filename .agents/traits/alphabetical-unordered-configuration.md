@@ -9,7 +9,17 @@ requirement: 'Prefer alphabetical ordering for miscellaneous configuration lists
   rather than sorting those blindly.'
 applicability: |-
   Applies when editing configuration lists or fields whose ordering has no semantic significance.
-  File types or languages: text/typescript, text/javascript, application/json, application/yaml, application/toml.
+paths:
+  - "*.ts"
+  - "*.mts"
+  - "*.cts"
+  - "*.js"
+  - "*.mjs"
+  - "*.cjs"
+  - "*.json"
+  - "*.yaml"
+  - "*.yml"
+  - "*.toml"
 ---
 ```diff
 -projects: ["traits/vite.config.ts", "oxlints/vite.config.ts"]

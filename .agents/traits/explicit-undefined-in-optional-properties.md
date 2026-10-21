@@ -9,8 +9,12 @@ requirement: "For TypeScript optional properties, explicitly include undefined
   omission."
 applicability: |-
   Applies when declaring optional properties.
-  File types or languages: text/typescript, text/tsx.
   Exception: When every optional property under assessment intentionally permits omission but disallows explicitly passing undefined.
+paths:
+  - "*.ts"
+  - "*.mts"
+  - "*.cts"
+  - "*.tsx"
 ---
 ```diff
 -readonly copyable?: boolean

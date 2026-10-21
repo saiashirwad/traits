@@ -10,8 +10,9 @@ requirement: When using Effect atom hooks in React, prefer the default registry
   configuration.
 applicability: |-
   Applies when using Effect atom hooks, registries, or per-instance React state isolation.
-  File types or languages: text/tsx.
   Exception: When every RegistryProvider under assessment defines a genuinely required distinct boundary for subtree-wide isolation, hydration, or custom registry configuration.
+paths:
+  - "*.tsx"
 ---
 ```diff
 -<RegistryProvider><Counter /></RegistryProvider>

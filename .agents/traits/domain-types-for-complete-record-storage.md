@@ -8,7 +8,11 @@ requirement: For storage operations that create or replace complete domain
   without dropping optional metadata or extension fields.
 applicability: |-
   Applies when designing or implementing storage operations that create or replace complete domain records.
-  File types or languages: text/typescript, text/tsx.
+paths:
+  - "*.ts"
+  - "*.mts"
+  - "*.cts"
+  - "*.tsx"
 ---
 ```diff
 -const add = (name: TraitName, body: string) => persist({ name, body })

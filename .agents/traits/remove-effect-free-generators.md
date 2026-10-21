@@ -11,8 +11,12 @@ requirement: "Remove unnecessary Effect.gen and Effect.fn generator wrappers:
   transformation-chain layout are separate concerns."
 applicability: |-
   Applies when introducing or reviewing Effect.gen wrappers and Layer construction.
-  File types or languages: text/typescript, text/tsx.
   Exception: When every Effect.gen wrapper under assessment sequences effectful work rather than merely returning an existing value, Effect, or Layer.
+paths:
+  - "*.ts"
+  - "*.mts"
+  - "*.cts"
+  - "*.tsx"
 ---
 ```diff
 -const load = Effect.gen(function* () { return yield* read })

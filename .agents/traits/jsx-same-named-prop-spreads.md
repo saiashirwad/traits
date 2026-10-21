@@ -8,7 +8,9 @@ requirement: "In React JSX, prefer object-spread shorthand for ordinary props
   explicit assignments for renamed or computed values."
 applicability: |-
   Applies when passing same-named variables as ordinary React JSX props.
-  File types or languages: text/tsx, text/jsx.
+paths:
+  - "*.tsx"
+  - "*.jsx"
 ---
 ```diff
 -<Step key={id} step={step} index={index} />

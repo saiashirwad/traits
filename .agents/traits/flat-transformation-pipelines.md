@@ -12,7 +12,11 @@ requirement: Use `.pipe(...)` to keep successive transformations flat and
   flat composition style.
 applicability: |-
   Applies when composing successive transformations or Effect.fn transformation arguments.
-  File types or languages: text/typescript, text/tsx.
+paths:
+  - "*.ts"
+  - "*.mts"
+  - "*.cts"
+  - "*.tsx"
 ---
 ```diff
 -const layer = Layer.unwrap(effect).pipe(Layer.provide(dependencies))

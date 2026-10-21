@@ -10,7 +10,11 @@ requirement: "For optional or nullable Effect Schema fields, apply the field
   requires .pipe even when there is no chain of successive transformations."
 applicability: |-
   Applies when applying optional, nullable, or similar modifiers to Effect Schema fields.
-  File types or languages: text/typescript, text/tsx.
+paths:
+  - "*.ts"
+  - "*.mts"
+  - "*.cts"
+  - "*.tsx"
 ---
 ```diff
 -location: S.optional(SourceLocation)

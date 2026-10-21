@@ -12,7 +12,11 @@ requirement: When a composite value is used as a key in an Effect collection,
   merely because they contain data.
 applicability: |-
   Applies when composite keys in Effect collections, caches, or Atom.family need content-based equality.
-  File types or languages: text/typescript, text/tsx.
+paths:
+  - "*.ts"
+  - "*.mts"
+  - "*.cts"
+  - "*.tsx"
 ---
 ```diff
 -const key = { id, code } // Fresh object identity on every call.

@@ -11,7 +11,15 @@ requirement: Use @effect/vitest wherever tests execute Effects, yielding Effects
   execute Effects.
 applicability: |-
   Applies when writing or updating tests that execute Effects or acquire scoped resources.
-  File types or languages: text/typescript, text/tsx, text/javascript, text/jsx.
+paths:
+  - "*.ts"
+  - "*.mts"
+  - "*.cts"
+  - "*.tsx"
+  - "*.js"
+  - "*.mjs"
+  - "*.cjs"
+  - "*.jsx"
 ---
 ```diff
 -it("loads", async () => { expect(await Effect.runPromise(load)).toBe("value") })

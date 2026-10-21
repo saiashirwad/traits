@@ -10,8 +10,10 @@ requirement: 'In React JSX, avoid unnecessary empty-content branches: render
   accessibility, or behavior.'
 applicability: |-
   Applies when writing conditional React JSX content or empty-content branches.
-  File types or languages: text/tsx, text/jsx.
   Exception: When every placeholder or explicit alternative under assessment is required for layout, accessibility, or behavior rather than being an unnecessary empty-content branch.
+paths:
+  - "*.tsx"
+  - "*.jsx"
 ---
 ```diff
 -{status === "Copy" ? "" : status}

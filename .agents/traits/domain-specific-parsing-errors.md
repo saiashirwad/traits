@@ -13,8 +13,12 @@ requirement: At parsing boundaries with recoverable domain-specific failures,
   merely for consistency.
 applicability: |-
   Applies when defining recoverable custom domain errors or modeling parsing failures.
-  File types or languages: text/typescript, text/tsx.
   Exception: When the parsing failure is already represented by SchemaError from input-schema validation.
+paths:
+  - "*.ts"
+  - "*.mts"
+  - "*.cts"
+  - "*.tsx"
 ---
 ```diff
 -const parsed = Effect.try(() => parseDocument(text))
