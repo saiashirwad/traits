@@ -1,3 +1,4 @@
+// traits-ignore-file effect-platform-services: This Node loader hook runs before the package's dependencies, including Effect platform services, are available.
 // oxlint-disable effecttsgo/async-function effecttsgo/missing-pipeable-signature effecttsgo/strict-boolean-expressions
 // Node runs this loader hook before the package's dependencies, including Effect, are available.
 

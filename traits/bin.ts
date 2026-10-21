@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // traits-ignore-file effect-utilities-with-native-behavior-exceptions: Effect utilities are unavailable until this launcher installs dependencies.
-// traits-ignore-file 121f5624-31b3-41d6-a63c-30c040743ef8: Native Node APIs must install project dependencies before Effect platform services are available.
-// traits-ignore-file a0e777e3-a8e0-4feb-9d8b-aa6d6f9eaa91: Dependency installation must finish before Effect error-handling APIs are available.
+// traits-ignore-file effect-platform-services: Native Node APIs must install project dependencies before Effect platform services are available.
+// traits-ignore-file effect-based-exception-handling: Dependency installation must finish before Effect error-handling APIs are available.
 import { spawn } from "node:child_process"
 import { once } from "node:events"
 import { existsSync, readFileSync } from "node:fs"
