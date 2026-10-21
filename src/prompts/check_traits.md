@@ -3,7 +3,7 @@
  For a whole-project review, prefer an explicit project-file manifest rather than a filesystem-wide glob.
  Never submit secrets, .env files, credentials, binary assets, generated lockfiles, dependency trees, or reference repositories for assessment.
  Supply include as file paths or glob patterns relevant to the work, relative to the MCP working directory or absolute.
- Globs are expanded and overlapping matches are checked once. Directories are not reviewed as files; use patterns such as traits-rs/src/**/*.rs.
+ Globs are expanded and overlapping matches are checked once. Directories are not reviewed as files; use patterns such as src/**/*.rs.
  Built-in exclusions cover dependency trees, Git metadata, and nested worktrees. Configure project-specific exclusions through exclude nodes in traits.kdl.
  Configured exclusions are filenames or native filesystem glob patterns, resolved beside traits.kdl. Use directory/** to exclude a subtree; bare directories are not expanded.
  Git-ignored files are excluded by default, with ignore rules refreshed on every call. Untracked files do not need to be added to Git to be evaluated. Tracked files remain eligible even if ignore rules match them. Set exclude-gitignored #false in traits.kdl to disable this filter; explicit excludes still apply. Git failures fail the check.

@@ -363,7 +363,7 @@ skipped remediation or lost signal.
 ## Operation
 
 `traits` is a single Rust binary installed once, for example with
-`cargo install --path traits-rs`. It runs the MCP server over stdio from the
+`cargo install --path .` from a clone of this repository. It runs the MCP server over stdio from the
 checkout root, reads `traits.kdl` from the worktree root, and falls back to
 `~/.config/traits/config.kdl`. It installs nothing into the project. Run
 `traits config check` to validate providers and credentials.

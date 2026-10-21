@@ -2,4 +2,4 @@
 .env*
 !.env.example
 .worktrees/
-traits-rs/target/
+/target/

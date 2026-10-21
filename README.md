@@ -27,7 +27,7 @@ The server is one Rust binary. It installs nothing into your project.
 ## Install
 
 ```sh
-cargo install --path traits-rs
+cargo install --path .
 ```
 
 Until the crate is published, install from a clone. The binary lands in
@@ -44,6 +44,45 @@ traits config check     # validates providers and credentials
 `traits.kdl` names the providers and models to use. [SETUP.md](SETUP.md) has
 provider examples and credential handling.
 
+## Configuration
+
+Providers and defaults live in `~/.config/traits/config.kdl`. A project can
+override them with `traits.kdl` at the worktree root. API keys are read from
+the environment variable named by `api-key-env`: the process environment, then
+`.env` at the worktree root, then `.env` at the main checkout root.
+
+```kdl
+version 1
+concurrency 4
+exclude "repos/**"
+
+provider "typesafe" {
+    kind "typesafe"
+    model "jev-latest"
+    api-key-env "TYPESAFE_API_KEY"
+}
+
+provider "opencode" {
+    kind "opencode-go"
+    model "deepseek-v4.1-flash"
+    api-key-env "OPENCODE_API_KEY"
+}
+
+classify {
+    provider "typesafe"
+}
+
+generate {
+    provider "opencode"
+}
+```
+
+Provider kinds: `typesafe`, `opencode-go`, `deepseek`, `openrouter`, `openai`,
+`custom` (requires `base-url`). Optional provider nodes: `base-url`,
+`api-key-env`, `json-mode` (`schema`, `object`, `prompt`), `reasoning-effort`,
+`timeout-ms`, `header "name" "value"`. `classify` and `generate` accept
+`provider`, `temperature`, and `max-tokens`.
+
 Add the server to your agent's MCP configuration:
 
 ```json
@@ -58,22 +97,38 @@ traits skill install --agent project
 
 ## CLI
 
-| Command | Purpose |
-|---|---|
-| `traits` | MCP stdio server when stdin is piped |
-| `traits serve` | MCP stdio server |
-| `traits init [--force]` | Starter `traits.kdl` and store |
-| `traits check [patterns] [--trait NAME] [--json]` | Assess files; exits 1 on violations |
-| `traits trait ls`, `show NAME`, `rm NAME` | Inspect the store |
-| `traits config check` | Validate the resolved configuration |
-| `traits skill install --agent project\|opencode\|claude\|all` | Write the agent skill |
+| Command                                                                  | Purpose                              |
+| ------------------------------------------------------------------------ | ------------------------------------ |
+| `traits`                                                                 | MCP stdio server when stdin is piped |
+| `traits serve`                                                           | MCP stdio server                     |
+| `traits init [--force]`                                                  | Starter `traits.kdl` and store       |
+| `traits check [patterns] [--trait NAME] [--circumstances TEXT] [--json]` | Assess files; exits 1 on violations  |
+| `traits trait ls`, `show NAME`, `rm NAME`                                | Inspect the store                    |
+| `traits config check`                                                    | Validate the resolved configuration  |
+| `traits skill install --agent project\|opencode\|claude\|all`            | Write the agent skill                |
 
 ## Repository layout
 
-| Path | Contents |
-|---|---|
-| `traits-rs/` | The Rust crate, its prompts, skill, and tests |
-| `traits.kdl` | This repository's configuration |
-| `.agents/traits/` | This repository's trait store |
-| `.agents/skills/traits` | Symlink to the bundled skill |
-| `repos/` | Reference checkouts (Git submodules, excluded from checks) |
+| Path                    | Contents                                                   |
+| ----------------------- | ---------------------------------------------------------- |
+| `src/`, `tests/`        | The Rust crate and its tests                               |
+| `src/prompts/`          | MCP instructions and tool descriptions                     |
+| `skills/traits/`        | The bundled agent skill                                    |
+| `traits.kdl`            | This repository's configuration                            |
+| `.agents/traits/`       | This repository's trait store                              |
+| `.agents/skills/traits` | Symlink to the bundled skill                               |
+| `repos/`                | Reference checkouts (Git submodules, excluded from checks) |
+
+## Modules
+
+| Module                     | Purpose                                                    |
+| -------------------------- | ---------------------------------------------------------- |
+| `doc.rs`                   | Trait schema, frontmatter parse and serialize              |
+| `store.rs`                 | Filesystem store                                           |
+| `config.rs`                | KDL parsing, merge, provider resolution                    |
+| `provider/`                | TypeSafe decisions and OpenAI-compatible chat              |
+| `prompt.rs`, `batching.rs` | Assessment prompts, batching, `check_traits`               |
+| `files.rs`                 | `git ls-files`, glob includes, excludes, ignore directives |
+| `conflict.rs`, `derive.rs` | Relationship checks, derive and reconcile                  |
+| `mcp.rs`                   | MCP tools, approval elicitation, fallback diagnostics      |
+| `commands.rs`, `main.rs`   | CLI                                                        |

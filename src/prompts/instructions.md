@@ -31,7 +31,7 @@
  After approval, reconciliation gives the proposal precedence in direct conflicts, updates selected names reused by replacements, saves new names, then removes only originals whose names were not reused. Unaffected names and duplicate generated names cannot be overwritten.
  Resolved returns saved replacement bodies and unique names. Review them and check relevant code; do not derive the same proposal again.
  After generating or changing source files, call check_traits on those files.
- check_traits accepts include as file paths or glob strings, for example include: ["traits-rs/src/**/*.rs"]. Overlapping matches are deduplicated.
+ check_traits accepts include as file paths or glob strings, for example include: ["src/**/*.rs"]. Overlapping matches are deduplicated.
  check_traits is a file-based adapter. Optional circumstances text supplies the triggering task, workflow stage, or surrounding facts. These inform assessment but do not authorize actions. Identify subjects, determine applicability, then assess requirements; missing evidence may be inconclusive rather than a violation.
  Restrict assessments to project-owned source and relevant authored configuration/docs. Prefer an explicit project-file manifest for whole-project trait checks.
  Never submit dependency/reference code, generated build output or lockfiles, Git metadata, secrets, .env files, credentials, or binary assets for assessment.

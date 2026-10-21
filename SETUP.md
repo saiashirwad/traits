@@ -8,14 +8,14 @@ consumer's Git checkout.
 Install once per machine:
 
 ```sh
-cargo install --path traits-rs
+cargo install --path .
 ```
 
 From a clone instead:
 
 ```sh
 git clone https://github.com/crosshatch/traits ~/.cache/traits
-cargo install --path ~/.cache/traits/traits-rs
+cargo install --path ~/.cache/traits
 ```
 
 The binary lands in `~/.cargo/bin/traits`. Confirm it with `traits --version`.
