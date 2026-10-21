@@ -1,14 +1,5 @@
 .DS_Store
-node_modules/
-dist/
-coverage/
-*.tsbuildinfo
-.alchemy/
-.wrangler/
 .env*
 !.env.example
-test-results/
-playwright-report/
-.vitest/
 .worktrees/
 traits-rs/target/

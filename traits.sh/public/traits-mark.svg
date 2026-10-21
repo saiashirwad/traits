@@ -1,7 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none">
-  <title>Traits</title>
-  <path d="M24 25C16 16 4 17 4 25S16 34 24 25 44 16 44 25 32 34 24 25" stroke="#c9795f" stroke-width="1.6"/>
-  <path d="M9 5 13 7H35L39 5 41 16 37 14Q36 12 32 12H28V35Q28 39 32 41L24 45 16 41Q20 39 20 35V12H16Q12 12 11 14L7 16Z" fill="#506d75"/>
-  <path d="M14 9H34" stroke="#e9c373" stroke-width="1"/>
-  <path d="M18 20.2Q21 22 24 25T30 29.8" stroke="#c9795f" stroke-width="1.6"/>
-</svg>

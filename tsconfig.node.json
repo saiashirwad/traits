@@ -1,7 +1,0 @@
-{
-  "extends": "./tsconfig.base.json",
-  "include": ["*.ts", "oxlints/**/*.ts", "tasks/**/*.ts"],
-  "compilerOptions": {
-    "types": ["node"]
-  }
-}
