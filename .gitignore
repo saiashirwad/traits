@@ -11,3 +11,4 @@ test-results/
 playwright-report/
 .vitest/
 .worktrees/
+traits-rs/target/

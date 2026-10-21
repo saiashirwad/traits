@@ -1,0 +1,12 @@
+pub mod batching;
+pub mod commands;
+pub mod config;
+pub mod conflict;
+pub mod derive;
+pub mod doc;
+pub mod error;
+pub mod files;
+pub mod mcp;
+pub mod prompt;
+pub mod provider;
+pub mod store;
