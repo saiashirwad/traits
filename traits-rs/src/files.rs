@@ -15,13 +15,13 @@ use std::collections::HashSet;
 use std::path::{Component, Path, PathBuf};
 use std::sync::LazyLock;
 
-use globset::{GlobBuilder, GlobMatcher};
+use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 use ignore::WalkBuilder;
 use regex::Regex;
 
 use crate::config::Config;
 use crate::doc::Trait;
-use crate::error::ToolFailure;
+use crate::error::{ConfigError, ToolFailure};
 
 static IGNORE_DIRECTIVE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^//\s*traits-ignore-file\s+(\S+)\s*:\s*(\S.*)$").expect("valid directive regex")
@@ -93,7 +93,7 @@ pub async fn git_included_files(config: &Config) -> Result<Option<HashSet<PathBu
 /// first-seen order and deduplicating exact paths.
 pub fn resolve_includes(config: &Config, includes: &[String]) -> Result<Vec<PathBuf>, ToolFailure> {
     let root = &config.config_root;
-    let excludes = ExcludeSet::build(config)?;
+    let excludes = &config.excludes;
     let mut seen = HashSet::new();
     let mut resolved = Vec::new();
 
@@ -220,53 +220,56 @@ fn has_always_excluded_component(path: &Path) -> bool {
     })
 }
 
-/// Configured exclusions. Patterns with a path separator match the absolute
-/// path; bare names match a file's basename at any depth.
-struct ExcludeSet {
-    path_globs: Vec<GlobMatcher>,
-    name_globs: Vec<GlobMatcher>,
+/// Configured exclusions, compiled once at config load. Patterns with a path
+/// separator match the absolute path; bare names match a file's basename at
+/// any depth.
+#[derive(Debug, Clone, Default)]
+pub struct Excludes {
+    patterns: Vec<String>,
+    paths: GlobSet,
+    names: GlobSet,
 }
 
-impl ExcludeSet {
-    fn build(config: &Config) -> Result<Self, ToolFailure> {
-        let mut path_globs = Vec::new();
-        let mut name_globs = Vec::new();
-        for pattern in &config.excludes {
+impl Excludes {
+    pub fn compile(root: &Path, patterns: Vec<String>) -> Result<Self, ConfigError> {
+        let mut paths = GlobSetBuilder::new();
+        let mut names = GlobSetBuilder::new();
+        for pattern in &patterns {
+            let invalid = |error: globset::Error| {
+                ConfigError::new(format!("Invalid exclude pattern {pattern:?}: {error}"))
+            };
             if pattern.contains('/') || pattern.contains('\\') {
-                let absolute_pattern = absolute(&config.config_root, Path::new(pattern));
-                path_globs.push(build_glob(&absolute_pattern, pattern)?);
+                let absolute_pattern = absolute(root, Path::new(pattern));
+                paths.add(glob(&absolute_pattern.to_string_lossy()).map_err(invalid)?);
             } else {
-                name_globs.push(build_glob(Path::new(pattern), pattern)?);
+                names.add(glob(pattern).map_err(invalid)?);
             }
         }
+        let build = |set: GlobSetBuilder| {
+            set.build()
+                .map_err(|error| ConfigError::new(format!("Invalid exclude patterns: {error}")))
+        };
         Ok(Self {
-            path_globs,
-            name_globs,
+            paths: build(paths)?,
+            names: build(names)?,
+            patterns,
         })
+    }
+
+    pub fn patterns(&self) -> &[String] {
+        &self.patterns
     }
 
     fn matches(&self, path: &Path) -> bool {
-        if self.path_globs.iter().any(|glob| glob.is_match(path)) {
-            return true;
-        }
-        match path.file_name() {
-            Some(name) => self
-                .name_globs
-                .iter()
-                .any(|glob| glob.is_match(Path::new(name))),
-            None => false,
-        }
+        self.paths.is_match(path)
+            || path
+                .file_name()
+                .is_some_and(|name| self.names.is_match(Path::new(name)))
     }
 }
 
-fn build_glob(pattern: &Path, source: &str) -> Result<GlobMatcher, ToolFailure> {
-    GlobBuilder::new(&pattern.to_string_lossy())
-        .literal_separator(true)
-        .build()
-        .map(|glob| glob.compile_matcher())
-        .map_err(|error| {
-            ToolFailure::platform(format!("invalid exclude pattern {source:?}: {error}"))
-        })
+fn glob(pattern: &str) -> Result<globset::Glob, globset::Error> {
+    GlobBuilder::new(pattern).literal_separator(true).build()
 }
 
 /// Parse leading `// traits-ignore-file <reference>: <reason>` directives from a
@@ -289,13 +292,11 @@ pub fn trait_ignores(text: &str) -> HashSet<String> {
     references
 }
 
-/// Drop traits whose exact name appears in the file's ignore directives.
-pub fn exclude_ignored(traits: &[Trait], text: &str) -> Vec<Trait> {
+/// Indices of the traits whose exact name the file's ignore directives omit.
+pub fn exclude_ignored(traits: &[Trait], text: &str) -> Vec<usize> {
     let references = trait_ignores(text);
-    traits
-        .iter()
-        .filter(|trait_value| !references.contains(trait_value.name.as_str()))
-        .cloned()
+    (0..traits.len())
+        .filter(|&index| !references.contains(traits[index].name.as_str()))
         .collect()
 }
 
@@ -306,7 +307,7 @@ mod tests {
 
     fn trait_named(name: &str) -> Trait {
         Trait {
-            name: TraitName(name.to_string()),
+            name: TraitName::parse(name).unwrap(),
             subject: "Subject.".to_string(),
             requirement: "Requirement.".to_string(),
             applicability: None,
@@ -320,10 +321,9 @@ mod tests {
         Config {
             config_root: root.to_path_buf(),
             store: root.join("traits"),
-            concurrency: 4,
+            concurrency: std::num::NonZeroUsize::new(4).unwrap(),
             exclude_gitignored: false,
-            excludes,
-            default_provider: None,
+            excludes: Excludes::compile(root, excludes).unwrap(),
             classify: Default::default(),
             generate: Default::default(),
             providers: Vec::new(),
@@ -373,7 +373,7 @@ mod tests {
             &[first.clone(), second.clone()],
             "// traits-ignore-file direct-callbacks: exception",
         );
-        assert_eq!(selected, vec![second.clone()]);
+        assert_eq!(selected, vec![1]);
         let header = "// traits-ignore-file direct-callbacks: first exception\n// traits-ignore-file use-arrow-functions: second exception\nconst value = 1";
         assert!(exclude_ignored(&[first, second], header).is_empty());
     }
@@ -383,10 +383,7 @@ mod tests {
         let first = trait_named("direct-callbacks");
         let second = trait_named("use-arrow-functions");
         let header = "// traits-ignore-file direct: partial\n// traits-ignore-file Direct-callbacks: wrong casing\n// traits-ignore-file direct-callbacks.md: filename\n// traits-ignore-file unknown-trait: unknown";
-        assert_eq!(
-            exclude_ignored(&[first.clone(), second.clone()], header),
-            vec![first, second]
-        );
+        assert_eq!(exclude_ignored(&[first, second], header), vec![0, 1]);
     }
 
     #[test]
@@ -397,7 +394,7 @@ mod tests {
                 std::slice::from_ref(&renamed),
                 "// traits-ignore-file direct-callbacks: old name"
             ),
-            vec![renamed.clone()]
+            vec![0]
         );
         assert!(
             exclude_ignored(
@@ -416,14 +413,14 @@ mod tests {
                 std::slice::from_ref(&first),
                 "// traits-ignore-file direct-callbacks:   "
             ),
-            vec![first.clone()]
+            vec![0]
         );
         assert_eq!(
             exclude_ignored(
                 std::slice::from_ref(&first),
                 "const value = 1\n// traits-ignore-file direct-callbacks: too late"
             ),
-            vec![first]
+            vec![0]
         );
     }
 

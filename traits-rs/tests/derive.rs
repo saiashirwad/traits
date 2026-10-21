@@ -15,8 +15,8 @@ use traits::derive::{Approval, Approver, DeriveParams, TraitDerivation, derive};
 use traits::doc::{Trait, TraitName};
 use traits::error::ToolFailure;
 use traits::provider::{
-    ClassifyAnswer, ClassifyQuestion, DecisionModel, DecisionResponse, GenerateRequest,
-    LanguageModel, Models, Usage,
+    Answer, DecisionModel, DecisionResponse, GenerateRequest, LanguageModel, Models, Question,
+    Usage,
 };
 use traits::store::TraitStore;
 
@@ -88,70 +88,44 @@ struct MockDecision {
 impl DecisionModel for MockDecision {
     async fn decide(
         &self,
-        state: Value,
-        questions: Vec<(String, ClassifyQuestion)>,
+        state: &Value,
+        questions: &[Question<'_>],
     ) -> Result<DecisionResponse, ToolFailure> {
-        let key = questions
-            .first()
-            .map(|(key, _)| key.clone())
-            .unwrap_or_else(|| "assessment".to_string());
+        let question = questions[0];
+        let key = question.id;
         let name = state
             .get("trait")
             .and_then(|trait_value| trait_value.get("name"))
             .and_then(|name| name.as_str());
-        let (label, labels): (String, Vec<&str>) = match name {
+        let label: String = match name {
             Some(name) => {
                 if key == "coverage" {
-                    let label = self
-                        .coverage
+                    self.coverage
                         .get(name)
                         .cloned()
-                        .unwrap_or_else(|| "complete".to_string());
-                    (label, vec!["complete", "incomplete", "inconclusive"])
+                        .unwrap_or_else(|| "complete".to_string())
                 } else {
-                    let label = self
-                        .relationships
+                    self.relationships
                         .get(name)
                         .cloned()
-                        .unwrap_or_else(|| panic!("missing relationship for {name}"));
-                    (
-                        label,
-                        vec![
-                            "distinct",
-                            "covered",
-                            "clarification",
-                            "conflict",
-                            "inconclusive",
-                        ],
-                    )
+                        .unwrap_or_else(|| panic!("missing relationship for {name}"))
                 }
             }
-            None => ("atomic".to_string(), vec!["atomic", "decomposable"]),
+            None => "atomic".to_string(),
         };
-        let probabilities: IndexMap<String, f64> = labels
+        let choice = question
+            .criteria
             .iter()
-            .map(|candidate| {
-                (
-                    candidate.to_string(),
-                    if *candidate == label.as_str() {
-                        1.0
-                    } else {
-                        0.0
-                    },
-                )
-            })
-            .collect();
-        let mut answers = IndexMap::new();
-        answers.insert(
-            key,
-            ClassifyAnswer {
-                label,
+            .position(|criterion| criterion.label == label)
+            .unwrap_or_else(|| panic!("{label} is not a {key} label"));
+        let mut probabilities = vec![0.0; question.criteria.len()];
+        probabilities[choice] = 1.0;
+        Ok(DecisionResponse {
+            answers: vec![Answer {
+                choice,
                 probabilities,
                 confidence: None,
-            },
-        );
-        Ok(DecisionResponse {
-            answers,
+            }],
             usage: Usage::default(),
         })
     }
@@ -532,6 +506,19 @@ async fn invalid_generation_leaves_the_store_untouched() {
     for response in [
         Value::String("Use two spaces for indentation.".to_string()),
         json!({ "traits": [] }),
+        json!({ "traits": [{
+            "name": "../escape",
+            "subject": "Code indentation.",
+            "requirement": "Use two spaces.",
+            "purpose": "Consistency."
+        }] }),
+        json!({ "traits": [{
+            "name": "indentation",
+            "subject": "Code indentation.",
+            "requirement": "Use two spaces.",
+            "purpose": "Consistency.",
+            "guidance": "  "
+        }] }),
     ] {
         let h = harness(
             vec![original()],

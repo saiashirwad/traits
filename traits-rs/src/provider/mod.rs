@@ -2,8 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use indexmap::IndexMap;
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use crate::config::{Config, ProviderConfig, ProviderKind};
 use crate::error::{ConfigError, ToolFailure};
@@ -14,16 +13,40 @@ use typesafe::TypeSafeProvider;
 pub mod openai;
 pub mod typesafe;
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct ClassifyQuestion {
-    pub instructions: String,
-    pub criteria: IndexMap<String, String>,
+/// Probability drift tolerated per criteria label before a distribution is
+/// rejected, matching Effect's `probabilityPrecision` of 2.
+const DRIFT_PER_LABEL: f64 = 0.005;
+/// Below this drift the distribution is left untouched; above it the values are
+/// rescaled to sum to one.
+const RESCALE_THRESHOLD: f64 = 1e-6;
+
+/// One labeled outcome a decision question may choose.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Criterion {
+    pub label: &'static str,
+    pub description: &'static str,
 }
 
+/// A closed set of decision outcomes. `ALL[i]` is the outcome `CRITERIA[i]`
+/// describes.
+pub trait Choice: Copy + 'static {
+    const ALL: &'static [Self];
+    const CRITERIA: &'static [Criterion];
+    const ALIGNED: () = assert!(Self::ALL.len() == Self::CRITERIA.len());
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct Question<'a> {
+    pub id: &'a str,
+    pub instructions: &'a str,
+    pub criteria: &'static [Criterion],
+}
+
+/// A validated answer. `choice` and `probabilities` index the question's criteria.
 #[derive(Debug, Clone, PartialEq)]
-pub struct ClassifyAnswer {
-    pub label: String,
-    pub probabilities: IndexMap<String, f64>,
+pub struct Answer {
+    pub choice: usize,
+    pub probabilities: Vec<f64>,
     pub confidence: Option<f64>,
 }
 
@@ -35,7 +58,8 @@ pub struct Usage {
 
 #[derive(Debug, Clone)]
 pub struct DecisionResponse {
-    pub answers: IndexMap<String, ClassifyAnswer>,
+    /// One answer per question, in question order.
+    pub answers: Vec<Answer>,
     pub usage: Usage,
 }
 
@@ -43,9 +67,125 @@ pub struct DecisionResponse {
 pub trait DecisionModel: Send + Sync {
     async fn decide(
         &self,
-        state: Value,
-        questions: Vec<(String, ClassifyQuestion)>,
+        state: &Value,
+        questions: &[Question<'_>],
     ) -> Result<DecisionResponse, ToolFailure>;
+}
+
+/// Ask one question and decode the chosen outcome.
+pub async fn ask<C: Choice>(
+    model: &dyn DecisionModel,
+    state: &Value,
+    id: &str,
+    instructions: &str,
+) -> Result<C, ToolFailure> {
+    let () = C::ALIGNED;
+    let question = Question {
+        id,
+        instructions,
+        criteria: C::CRITERIA,
+    };
+    let answers = decide(model, state, &[question]).await?;
+    Ok(C::ALL[answers[0].choice])
+}
+
+/// Ask `questions` and return one answer per question, in order, each sized to
+/// its question's criteria, so callers can index answers without checking.
+pub async fn decide(
+    model: &dyn DecisionModel,
+    state: &Value,
+    questions: &[Question<'_>],
+) -> Result<Vec<Answer>, ToolFailure> {
+    let answers = model.decide(state, questions).await?.answers;
+    if answers.len() != questions.len() {
+        return Err(ToolFailure::ai(format!(
+            "Decision model returned {} answers for {} questions",
+            answers.len(),
+            questions.len()
+        )));
+    }
+    for (question, answer) in questions.iter().zip(&answers) {
+        let size = question.criteria.len();
+        if answer.choice >= size || answer.probabilities.len() != size {
+            return Err(ToolFailure::ai(format!(
+                "Decision model returned a malformed answer for \"{}\"",
+                question.id
+            )));
+        }
+    }
+    Ok(answers)
+}
+
+fn criteria_json(criteria: &[Criterion]) -> Value {
+    criteria
+        .iter()
+        .map(|criterion| {
+            (
+                criterion.label.to_string(),
+                Value::String(criterion.description.to_string()),
+            )
+        })
+        .collect::<Map<_, _>>()
+        .into()
+}
+
+/// Validate a provider's raw answer: the label must be one of the question's
+/// criteria, and every criterion needs a probability in [0, 1] with the total
+/// within drift of one, rescaled when it drifts.
+fn validate_answer(
+    question: &Question<'_>,
+    label: Option<&str>,
+    probability: impl Fn(&str) -> Option<f64>,
+    confidence: Option<f64>,
+) -> Result<Answer, ToolFailure> {
+    let id = question.id;
+    let choice = label
+        .and_then(|label| {
+            question
+                .criteria
+                .iter()
+                .position(|criterion| criterion.label == label)
+        })
+        .ok_or_else(|| {
+            ToolFailure::ai(format!(
+                "Provider returned an unknown label for decision \"{id}\""
+            ))
+        })?;
+
+    let mut probabilities = question
+        .criteria
+        .iter()
+        .map(|criterion| {
+            probability(criterion.label)
+                .filter(|probability| probability.is_finite() && (0.0..=1.0).contains(probability))
+                .ok_or_else(|| {
+                    ToolFailure::ai(format!(
+                        "Provider returned no probability for label \"{}\" of decision \"{id}\"",
+                        criterion.label
+                    ))
+                })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let total: f64 = probabilities.iter().sum();
+    let tolerance = question.criteria.len() as f64 * DRIFT_PER_LABEL + RESCALE_THRESHOLD;
+    let drift = (total - 1.0).abs();
+    if total == 0.0 || drift > tolerance {
+        return Err(ToolFailure::ai(format!(
+            "Provider returned probabilities that do not sum to 1 for decision \"{id}\""
+        )));
+    }
+    if drift > RESCALE_THRESHOLD {
+        for probability in &mut probabilities {
+            *probability /= total;
+        }
+    }
+
+    Ok(Answer {
+        choice,
+        probabilities,
+        confidence,
+    })
 }
 
 #[derive(Debug, Clone)]
@@ -71,19 +211,23 @@ pub struct Models {
 
 /// Build the decision and language models selected by configuration.
 pub fn build(config: &Config) -> Result<Models, ConfigError> {
-    let classify = config.classify_provider()?;
+    let classify = config
+        .classify
+        .provider
+        .as_ref()
+        .ok_or_else(|| ConfigError::new("No classify provider configured"))?;
 
     let decision: Arc<dyn DecisionModel> = match classify.kind {
         ProviderKind::Typesafe => Arc::new(TypeSafeProvider {
             client: build_client(classify.timeout_ms)?,
-            base_url: resolve_base_url(classify)?,
+            base_url: classify.base_url.clone(),
             api_key: resolve_api_key(classify)?,
             model: classify.model.clone(),
             extra_headers: classify.headers.clone(),
         }),
         _ => Arc::new(OpenAiCompatProvider::new(
             build_client(classify.timeout_ms)?,
-            resolve_base_url(classify)?,
+            classify.base_url.clone(),
             resolve_api_key(classify)?,
             classify.model.clone(),
             classify.kind,
@@ -95,24 +239,16 @@ pub fn build(config: &Config) -> Result<Models, ConfigError> {
         )),
     };
 
-    let language: Option<Arc<dyn LanguageModel>> = match config
-        .generate
-        .provider
-        .as_ref()
-        .or(config.default_provider.as_ref())
-    {
+    let language: Option<Arc<dyn LanguageModel>> = match &config.generate.provider {
         None => None,
-        Some(name) => {
-            let generate = config
-                .provider(name)
-                .ok_or_else(|| ConfigError::new(format!("Unknown provider \"{name}\"")))?;
+        Some(generate) => {
             match generate.kind {
                 // TypeSafe is decision-only; treat it as "no language model"
                 // so classify-only configurations still serve check_traits.
                 ProviderKind::Typesafe => None,
                 _ => Some(Arc::new(OpenAiCompatProvider::new(
                     build_client(generate.timeout_ms)?,
-                    resolve_base_url(generate)?,
+                    generate.base_url.clone(),
                     resolve_api_key(generate)?,
                     generate.model.clone(),
                     generate.kind,
@@ -146,30 +282,5 @@ fn resolve_api_key(provider: &ProviderConfig) -> Result<String, ConfigError> {
             "Missing API key for provider \"{}\": environment variable {} is not set",
             provider.name, provider.api_key_env
         ))),
-    }
-}
-
-fn resolve_base_url(provider: &ProviderConfig) -> Result<String, ConfigError> {
-    if !provider.base_url.is_empty() {
-        return Ok(provider.base_url.clone());
-    }
-    default_base_url(provider.kind)
-        .map(str::to_string)
-        .ok_or_else(|| {
-            ConfigError::new(format!(
-                "Provider \"{}\" requires a base URL",
-                provider.name
-            ))
-        })
-}
-
-fn default_base_url(kind: ProviderKind) -> Option<&'static str> {
-    match kind {
-        ProviderKind::Typesafe => Some("https://api.typesafe.ai/v1"),
-        ProviderKind::OpenCodeGo => Some("https://opencode.ai/inference/go/openai/v1"),
-        ProviderKind::DeepSeek => Some("https://api.deepseek.com/v1"),
-        ProviderKind::OpenRouter => Some("https://openrouter.ai/api/v1"),
-        ProviderKind::OpenAi => Some("https://api.openai.com/v1"),
-        ProviderKind::Custom => None,
     }
 }

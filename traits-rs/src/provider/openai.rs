@@ -8,15 +8,9 @@ use crate::config::{JsonMode, ProviderKind};
 use crate::error::ToolFailure;
 
 use super::{
-    ClassifyAnswer, ClassifyQuestion, DecisionResponse, GenerateRequest, LanguageModel, Usage,
+    Answer, DecisionResponse, GenerateRequest, LanguageModel, Question, Usage, criteria_json,
+    validate_answer,
 };
-
-/// Probability drift tolerated per criteria label before a classification is
-/// rejected, matching the TypeSafe provider.
-const DRIFT_PER_LABEL: f64 = 0.005;
-/// Below this drift the distribution is left untouched; above it the values are
-/// rescaled to sum to one.
-const RESCALE_THRESHOLD: f64 = 1e-6;
 
 const CLASSIFY_SYSTEM: &str = concat!(
     "You are a decision model. For every question choose exactly one label from its criteria ",
@@ -133,14 +127,14 @@ impl OpenAiCompatProvider {
         body
     }
 
-    fn classify_body(&self, state: &Value, questions: &[(String, ClassifyQuestion)]) -> Value {
+    fn classify_body(&self, state: &Value, questions: &[Question<'_>]) -> Value {
         let encoded_questions: Vec<Value> = questions
             .iter()
-            .map(|(id, question)| {
+            .map(|question| {
                 json!({
-                    "id": id,
+                    "id": question.id,
                     "instructions": question.instructions,
-                    "criteria": question.criteria,
+                    "criteria": criteria_json(question.criteria),
                 })
             })
             .collect();
@@ -194,10 +188,10 @@ impl OpenAiCompatProvider {
 impl super::DecisionModel for OpenAiCompatProvider {
     async fn decide(
         &self,
-        state: Value,
-        questions: Vec<(String, ClassifyQuestion)>,
+        state: &Value,
+        questions: &[Question<'_>],
     ) -> Result<DecisionResponse, ToolFailure> {
-        let body = self.classify_body(&state, &questions);
+        let body = self.classify_body(state, questions);
         let (status, text) = self.post(&body).await?;
         if !status.is_success() {
             return Err(ToolFailure::ai(format!(
@@ -216,7 +210,7 @@ impl super::DecisionModel for OpenAiCompatProvider {
             ))
         })?;
 
-        let answers = validate_answers(&questions, &payload)?;
+        let answers = validate_answers(questions, &payload)?;
         let usage = Usage {
             input_tokens: response
                 .pointer("/usage/prompt_tokens")
@@ -284,13 +278,12 @@ fn append_schema(system: &str, schema: &Value) -> String {
     format!("{system}\n\nRespond with only a JSON object matching this JSON Schema:\n{schema}")
 }
 
-/// Validate the classification answers against the requested questions. Answer
-/// ids must match exactly, labels must be known, and probabilities must be
-/// finite, in range, and sum to one.
+/// Match the classification answers to the requested questions: ids must
+/// match exactly, with no duplicates or extras, before each answer is validated.
 fn validate_answers(
-    questions: &[(String, ClassifyQuestion)],
+    questions: &[Question<'_>],
     payload: &Value,
-) -> Result<IndexMap<String, ClassifyAnswer>, ToolFailure> {
+) -> Result<Vec<Answer>, ToolFailure> {
     let raw_answers = payload
         .get("answers")
         .and_then(Value::as_array)
@@ -310,75 +303,34 @@ fn validate_answers(
         }
     }
 
-    for (id, _) in questions {
-        if !by_id.contains_key(id.as_str()) {
-            return Err(ToolFailure::ai(format!(
-                "Provider returned no answer for decision \"{id}\""
-            )));
-        }
-    }
-    if by_id.len() != questions.len() {
-        let extra = by_id
-            .keys()
-            .find(|id| !questions.iter().any(|(requested, _)| requested == *id))
-            .copied()
-            .unwrap_or_default();
+    let answers = questions
+        .iter()
+        .map(|question| {
+            let id = question.id;
+            let answer = by_id.get(id).ok_or_else(|| {
+                ToolFailure::ai(format!("Provider returned no answer for decision \"{id}\""))
+            })?;
+            let probabilities = answer.get("probabilities").and_then(Value::as_object);
+            validate_answer(
+                question,
+                answer.get("label").and_then(Value::as_str),
+                |label| {
+                    probabilities
+                        .and_then(|map| map.get(label))
+                        .and_then(Value::as_f64)
+                },
+                None,
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    if let Some(extra) = by_id
+        .keys()
+        .find(|id| !questions.iter().any(|question| question.id == **id))
+    {
         return Err(ToolFailure::ai(format!(
             "Provider returned an answer for unknown decision \"{extra}\""
         )));
-    }
-
-    let mut answers = IndexMap::with_capacity(questions.len());
-    for (id, question) in questions {
-        let answer = by_id[id.as_str()];
-        let label = answer
-            .get("label")
-            .and_then(Value::as_str)
-            .filter(|label| question.criteria.contains_key(*label))
-            .ok_or_else(|| {
-                ToolFailure::ai(format!(
-                    "Provider returned an unknown label for decision \"{id}\""
-                ))
-            })?;
-
-        let raw_probabilities = answer.get("probabilities").and_then(Value::as_object);
-        let mut probabilities = IndexMap::with_capacity(question.criteria.len());
-        let mut total = 0.0;
-        for criterion in question.criteria.keys() {
-            let probability = raw_probabilities
-                .and_then(|probabilities| probabilities.get(criterion))
-                .and_then(Value::as_f64)
-                .filter(|probability| probability.is_finite() && (0.0..=1.0).contains(probability))
-                .ok_or_else(|| {
-                    ToolFailure::ai(format!(
-                        "Provider returned no probability for label \"{criterion}\" of decision \"{id}\""
-                    ))
-                })?;
-            total += probability;
-            probabilities.insert(criterion.clone(), probability);
-        }
-
-        let tolerance = question.criteria.len() as f64 * DRIFT_PER_LABEL + RESCALE_THRESHOLD;
-        let drift = (total - 1.0).abs();
-        if total == 0.0 || drift > tolerance {
-            return Err(ToolFailure::ai(format!(
-                "Provider returned probabilities that do not sum to 1 for decision \"{id}\""
-            )));
-        }
-        if drift > RESCALE_THRESHOLD {
-            for probability in probabilities.values_mut() {
-                *probability /= total;
-            }
-        }
-
-        answers.insert(
-            id.clone(),
-            ClassifyAnswer {
-                label: label.to_string(),
-                probabilities,
-                confidence: None,
-            },
-        );
     }
     Ok(answers)
 }

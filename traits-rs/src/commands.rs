@@ -6,7 +6,6 @@ use rmcp::ServiceExt;
 use crate::batching::check_traits;
 use crate::config;
 use crate::doc::TraitName;
-use crate::error::ToolFailure;
 use crate::mcp::{Ready, ServerState, TraitsServer};
 use crate::provider;
 use crate::store::{FileSystemStore, TraitStore};
@@ -124,7 +123,7 @@ pub async fn check(
         .iter()
         .map(|name| TraitName::parse(name))
         .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| format!("Invalid trait name: {error}"))?;
+        .map_err(|error| error.to_string())?;
     let findings = check_traits(
         &ready.config,
         &ready.store,
@@ -155,7 +154,7 @@ pub async fn check(
             println!(
                 "{} {} at {location}",
                 finding.assessment.classification.as_str(),
-                finding.r#trait.name.0
+                finding.r#trait.name.as_str()
             );
         }
     }
@@ -179,14 +178,14 @@ pub async fn trait_ls(config_path: Option<&Path>) -> Result<(), String> {
         .await
         .map_err(|failure| failure.message().to_string())?
     {
-        println!("{} — {}", trait_value.name.0, trait_value.subject);
+        println!("{} — {}", trait_value.name.as_str(), trait_value.subject);
     }
     Ok(())
 }
 
 pub async fn trait_show(config_path: Option<&Path>, name: &str) -> Result<(), String> {
     let ready = build_state(config_path).await?;
-    let name = TraitName::parse(name).map_err(|error| format!("Invalid trait name: {error}"))?;
+    let name = TraitName::parse(name).map_err(|error| error.to_string())?;
     let trait_value = ready
         .store
         .get(&name)
@@ -198,13 +197,13 @@ pub async fn trait_show(config_path: Option<&Path>, name: &str) -> Result<(), St
 
 pub async fn trait_rm(config_path: Option<&Path>, name: &str) -> Result<(), String> {
     let ready = build_state(config_path).await?;
-    let name = TraitName::parse(name).map_err(|error| format!("Invalid trait name: {error}"))?;
+    let name = TraitName::parse(name).map_err(|error| error.to_string())?;
     ready
         .store
         .rm(std::slice::from_ref(&name))
         .await
         .map_err(|failure| failure.message().to_string())?;
-    println!("Removed {}", name.0);
+    println!("Removed {}", name.as_str());
     Ok(())
 }
 
@@ -215,8 +214,8 @@ pub fn config_check(config_path: Option<&Path>) -> Result<(), String> {
     println!("store: {}", config.store.display());
     println!("concurrency: {}", config.concurrency);
     println!("exclude-gitignored: {}", config.exclude_gitignored);
-    if !config.excludes.is_empty() {
-        println!("excludes: {}", config.excludes.join(", "));
+    if !config.excludes.patterns().is_empty() {
+        println!("excludes: {}", config.excludes.patterns().join(", "));
     }
     for provider in &config.providers {
         println!(
@@ -276,9 +275,4 @@ pub fn skill_install(agent: &str) -> Result<(), String> {
         println!("Wrote {}", target.display());
     }
     Ok(())
-}
-
-#[allow(dead_code)]
-fn _type_check(failure: ToolFailure) -> ToolFailure {
-    failure
 }

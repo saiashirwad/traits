@@ -15,7 +15,7 @@ use serde_json::{Value, json};
 
 use crate::batching::check_traits;
 use crate::config::Config;
-use crate::derive::{Approval, Approver, DeriveParams, TraitDerivation, derive};
+use crate::derive::{Approval, Approver, DeriveParams, derive};
 use crate::doc::{Trait, TraitName};
 use crate::error::ToolFailure;
 use crate::provider::Models;
@@ -133,22 +133,6 @@ impl Approver for McpApprover {
 }
 
 impl TraitsServer {
-    fn fallback(&self, tool: &str) -> Option<CallToolResult> {
-        match &*self.state {
-            ServerState::Failed(diagnostic) => {
-                let instructions = if tool == "derive_trait" {
-                    DERIVE_FALLBACK
-                } else {
-                    CHECK_FALLBACK
-                };
-                Some(CallToolResult::error(vec![ContentBlock::text(format!(
-                    "{diagnostic}\n\n{instructions}"
-                ))]))
-            }
-            ServerState::Ready(_) => None,
-        }
-    }
-
     async fn derive_tool(
         &self,
         ready: &Ready,
@@ -230,9 +214,7 @@ impl TraitsServer {
             {
                 Ok(names) => Some(names),
                 Err(error) => {
-                    return failure_result(&ToolFailure::platform(format!(
-                        "Invalid trait name: {error}"
-                    )));
+                    return failure_result(&ToolFailure::platform(error.to_string()));
                 }
             },
             None => None,
@@ -299,12 +281,11 @@ impl ServerHandler for TraitsServer {
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, McpError> {
         let name = request.name.to_string();
-        if let Some(result) = self.fallback(&name) {
-            return Ok(result.into());
-        }
         let ready = match &*self.state {
             ServerState::Ready(ready) => ready,
-            ServerState::Failed(_) => unreachable!("fallback handled"),
+            ServerState::Failed(diagnostic) => {
+                return Ok(configuration_failure(&name, diagnostic).into());
+            }
         };
         let args = Value::Object(request.arguments.unwrap_or_default());
         let result = match name.as_str() {
@@ -320,6 +301,17 @@ impl ServerHandler for TraitsServer {
         };
         Ok(result.into())
     }
+}
+
+fn configuration_failure(tool: &str, diagnostic: &str) -> CallToolResult {
+    let instructions = if tool == "derive_trait" {
+        DERIVE_FALLBACK
+    } else {
+        CHECK_FALLBACK
+    };
+    CallToolResult::error(vec![ContentBlock::text(format!(
+        "{diagnostic}\n\n{instructions}"
+    ))])
 }
 
 fn success_result<T: Serialize>(value: &T) -> CallToolResult {
@@ -414,9 +406,4 @@ fn check_schema() -> Arc<JsonObject> {
         .expect("check schema is an object")
         .clone(),
     )
-}
-
-#[allow(dead_code)]
-fn _type_check(derivation: TraitDerivation) -> TraitDerivation {
-    derivation
 }

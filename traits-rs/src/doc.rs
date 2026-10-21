@@ -4,8 +4,8 @@ use serde::{Deserialize, Serialize};
 /// Unique trait identity: descriptive kebab-case, no redundant `trait-` prefix,
 /// at most 80 ASCII characters. Also used as the Markdown filename stem.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct TraitName(pub String);
+#[serde(try_from = "String")]
+pub struct TraitName(String);
 
 #[derive(Debug, thiserror::Error, PartialEq)]
 #[error("Invalid trait name: {0}")]
@@ -13,6 +13,18 @@ pub struct TraitNameError(pub String);
 
 impl TraitName {
     pub fn parse(value: &str) -> Result<Self, TraitNameError> {
+        Self::try_from(value.to_string())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl TryFrom<String> for TraitName {
+    type Error = TraitNameError;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
         let valid = !value.is_empty()
             && value.len() <= 80
             && !value.starts_with("trait-")
@@ -23,32 +35,77 @@ impl TraitName {
                         .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
             });
         if valid {
-            Ok(Self(value.to_string()))
+            Ok(Self(value))
         } else {
-            Err(TraitNameError(value.to_string()))
+            Err(TraitNameError(value))
         }
-    }
-
-    pub fn as_str(&self) -> &str {
-        &self.0
     }
 }
 
 /// A complete stored trait. `context` is the optional Markdown body and is not
 /// part of the YAML frontmatter.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(try_from = "TraitFields")]
 pub struct Trait {
     pub name: TraitName,
     pub subject: String,
     pub requirement: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub applicability: Option<String>,
     pub purpose: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub guidance: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub context: Option<String>,
+}
+
+#[derive(Debug, thiserror::Error, PartialEq)]
+pub enum TraitError {
+    #[error("field {0} must not be blank")]
+    Blank(&'static str),
+    #[error(transparent)]
+    Name(#[from] TraitNameError),
+}
+
+/// Unvalidated trait fields as they arrive from JSON or YAML.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TraitFields {
+    name: String,
+    subject: String,
+    requirement: String,
+    #[serde(default)]
+    applicability: Option<String>,
+    purpose: String,
+    #[serde(default)]
+    guidance: Option<String>,
+    #[serde(default)]
+    context: Option<String>,
+}
+
+impl TryFrom<TraitFields> for Trait {
+    type Error = TraitError;
+
+    fn try_from(fields: TraitFields) -> Result<Self, Self::Error> {
+        let optional = |key, value: Option<String>| value.map(|value| text(key, value)).transpose();
+        Ok(Self {
+            name: TraitName::try_from(text("name", fields.name)?)?,
+            subject: text("subject", fields.subject)?,
+            requirement: text("requirement", fields.requirement)?,
+            applicability: optional("applicability", fields.applicability)?,
+            purpose: text("purpose", fields.purpose)?,
+            guidance: optional("guidance", fields.guidance)?,
+            context: fields.context,
+        })
+    }
+}
+
+fn text(key: &'static str, value: String) -> Result<String, TraitError> {
+    if value.trim().is_empty() {
+        Err(TraitError::Blank(key))
+    } else {
+        Ok(value)
+    }
 }
 
 /// Diagnosis shown when the decoded frontmatter does not match the installed schema.
@@ -134,21 +191,16 @@ pub fn parse(text: &str, path: &str) -> Result<Trait, crate::error::ToolFailure>
         parse_failure(path, detail, MALFORMED_DIAGNOSIS)
     })?;
 
-    let frontmatter = decode_frontmatter(yaml_text, path)?;
-
-    let context = if body.is_empty() {
-        None
-    } else {
-        Some(body.to_string())
-    };
-    Ok(Trait {
-        context,
-        ..frontmatter
-    })
+    let context = (!body.is_empty()).then(|| body.to_string());
+    decode_frontmatter(yaml_text, context, path)
 }
 
 /// Parse the raw frontmatter text as YAML and decode it into a `Trait`.
-fn decode_frontmatter(yaml_text: &str, path: &str) -> Result<Trait, crate::error::ToolFailure> {
+fn decode_frontmatter(
+    yaml_text: &str,
+    context: Option<String>,
+    path: &str,
+) -> Result<Trait, crate::error::ToolFailure> {
     let documents = Yaml::load_from_str(yaml_text).map_err(|error| {
         let marker = error.marker();
         let detail = format!(
@@ -202,45 +254,31 @@ fn decode_frontmatter(yaml_text: &str, path: &str) -> Result<Trait, crate::error
         }
     }
 
-    let name = require_field(path, "name", name)?;
-    let subject = require_field(path, "subject", subject)?;
-    let requirement = require_field(path, "requirement", requirement)?;
-    let purpose = require_field(path, "purpose", purpose)?;
-
-    let name = TraitName::parse(&name)
-        .map_err(|error| schema_failure(path, &format!("SchemaError: {error}")))?;
-
-    Ok(Trait {
-        name,
-        subject,
-        requirement,
+    let fields = TraitFields {
+        name: require_field(path, "name", name)?,
+        subject: require_field(path, "subject", subject)?,
+        requirement: require_field(path, "requirement", requirement)?,
         applicability,
-        purpose,
+        purpose: require_field(path, "purpose", purpose)?,
         guidance,
-        context: None,
-    })
+        context,
+    };
+    Trait::try_from(fields).map_err(|error| schema_failure(path, &format!("SchemaError: {error}")))
 }
 
 fn schema_failure(path: &str, detail: &str) -> crate::error::ToolFailure {
     parse_failure(path, detail, SCHEMA_DIAGNOSIS)
 }
 
-/// Decode a required scalar field as a present, non-blank string.
 fn string_field(
     path: &str,
     key: &str,
     value: &Yaml<'_>,
 ) -> Result<String, crate::error::ToolFailure> {
-    let text = value.as_str().ok_or_else(|| {
-        schema_failure(path, &format!("SchemaError: field {key} must be a string"))
-    })?;
-    if !text.chars().any(|c| !c.is_whitespace()) {
-        return Err(schema_failure(
-            path,
-            &format!("SchemaError: field {key} must not be blank"),
-        ));
-    }
-    Ok(text.to_string())
+    value
+        .as_str()
+        .map(str::to_string)
+        .ok_or_else(|| schema_failure(path, &format!("SchemaError: field {key} must be a string")))
 }
 
 /// Require a field to have been present in the frontmatter mapping.
@@ -430,13 +468,13 @@ pub enum Classification {
 }
 
 impl Classification {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Compliant => "compliant",
-            Self::Violation => "violation",
-            Self::NotApplicable => "not-applicable",
-            Self::Inconclusive => "inconclusive",
-        }
+    pub fn as_str(self) -> &'static str {
+        use crate::provider::Choice;
+        Self::CRITERIA[self as usize].label
+    }
+
+    pub fn requires_review(self) -> bool {
+        matches!(self, Self::Violation | Self::Inconclusive)
     }
 }
 
@@ -462,13 +500,4 @@ pub struct TraitEvaluation {
     pub r#trait: Trait,
     pub source: Source,
     pub assessment: Assessment,
-}
-
-impl TraitEvaluation {
-    pub fn requires_review(&self) -> bool {
-        matches!(
-            self.assessment.classification,
-            Classification::Violation | Classification::Inconclusive
-        )
-    }
 }

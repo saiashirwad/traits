@@ -5,36 +5,40 @@ use wiremock::matchers::{body_string_contains, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use traits::config::{Config, JsonMode, OperationConfig, ProviderConfig, ProviderKind};
+use traits::files::Excludes;
 use traits::provider::openai::OpenAiCompatProvider;
 use traits::provider::typesafe::TypeSafeProvider;
-use traits::provider::{ClassifyQuestion, DecisionModel, GenerateRequest, LanguageModel, build};
+use traits::provider::{Criterion, DecisionModel, GenerateRequest, LanguageModel, Question, build};
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn criteria(labels: &[(&str, &str)]) -> Vec<(String, String)> {
-    labels
-        .iter()
-        .map(|(label, description)| (label.to_string(), description.to_string()))
-        .collect()
-}
+const CRITERIA: &[Criterion] = &[
+    Criterion {
+        label: "compliant",
+        description: "The input abides by the trait.",
+    },
+    Criterion {
+        label: "violation",
+        description: "The input violates the trait.",
+    },
+    Criterion {
+        label: "not-applicable",
+        description: "The trait does not apply.",
+    },
+    Criterion {
+        label: "inconclusive",
+        description: "Insufficient context.",
+    },
+];
 
-fn classify_question() -> (String, ClassifyQuestion) {
-    (
-        "assessment".to_string(),
-        ClassifyQuestion {
-            instructions: "Assess the state.".to_string(),
-            criteria: criteria(&[
-                ("compliant", "The input abides by the trait."),
-                ("violation", "The input violates the trait."),
-                ("not-applicable", "The trait does not apply."),
-                ("inconclusive", "Insufficient context."),
-            ])
-            .into_iter()
-            .collect(),
-        },
-    )
+fn classify_question() -> Question<'static> {
+    Question {
+        id: "assessment",
+        instructions: "Assess the state.",
+        criteria: CRITERIA,
+    }
 }
 
 fn typesafe(server: &MockServer) -> TypeSafeProvider {
@@ -93,17 +97,16 @@ fn test_config(classify: ProviderConfig, generate: ProviderConfig) -> Config {
     Config {
         config_root: PathBuf::from("."),
         store: PathBuf::from("."),
-        concurrency: 1,
+        concurrency: std::num::NonZeroUsize::MIN,
         exclude_gitignored: true,
-        excludes: Vec::new(),
-        default_provider: None,
+        excludes: Excludes::default(),
         classify: OperationConfig {
-            provider: Some(classify.name.clone()),
+            provider: Some(classify.clone()),
             temperature: None,
             max_tokens: None,
         },
         generate: OperationConfig {
-            provider: Some(generate.name.clone()),
+            provider: Some(generate.clone()),
             temperature: None,
             max_tokens: None,
         },
@@ -162,14 +165,14 @@ async fn typesafe_happy_path() {
     let provider = typesafe(&server);
     let response = provider
         .decide(
-            json!({ "source": { "text": "hello" } }),
-            vec![classify_question()],
+            &json!({ "source": { "text": "hello" } }),
+            &[classify_question()],
         )
         .await
         .unwrap();
 
-    let answer = response.answers.get("assessment").unwrap();
-    assert_eq!(answer.label, "compliant");
+    let answer = &response.answers[0];
+    assert_eq!(CRITERIA[answer.choice].label, "compliant");
     assert_eq!(answer.probabilities.len(), 4);
     assert!((answer.confidence.unwrap() - 0.9).abs() < 1e-12);
     assert_eq!(response.usage.input_tokens, Some(12));
@@ -203,7 +206,7 @@ async fn typesafe_unknown_label_is_rejected() {
         .await;
 
     let result = typesafe(&server)
-        .decide(json!({}), vec![classify_question()])
+        .decide(&json!({}), &[classify_question()])
         .await;
     assert_eq!(
         error_message(&result),
@@ -233,13 +236,13 @@ async fn typesafe_small_drift_is_accepted_and_rescaled() {
         .await;
 
     let response = typesafe(&server)
-        .decide(json!({}), vec![classify_question()])
+        .decide(&json!({}), &[classify_question()])
         .await
         .unwrap();
-    let answer = response.answers.get("assessment").unwrap();
-    let total: f64 = answer.probabilities.values().sum();
+    let answer = &response.answers[0];
+    let total: f64 = answer.probabilities.iter().sum();
     assert!((total - 1.0).abs() < 1e-12);
-    let compliant = answer.probabilities.get("compliant").unwrap();
+    let compliant = answer.probabilities[0];
     assert!((compliant - 0.255 / 1.005).abs() < 1e-12);
 }
 
@@ -265,11 +268,36 @@ async fn typesafe_large_drift_is_rejected() {
         .await;
 
     let result = typesafe(&server)
-        .decide(json!({}), vec![classify_question()])
+        .decide(&json!({}), &[classify_question()])
         .await;
     assert_eq!(
         error_message(&result),
         "Provider returned probabilities that do not sum to 1 for decision \"assessment\""
+    );
+}
+
+#[tokio::test]
+async fn typesafe_missing_probability_is_rejected() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/systemone"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "answers": {
+                "assessment": {
+                    "choice": "compliant",
+                    "probabilities": { "compliant": 1.0, "violation": 0.0, "not-applicable": 0.0 }
+                }
+            }
+        })))
+        .mount(&server)
+        .await;
+
+    let result = typesafe(&server)
+        .decide(&json!({}), &[classify_question()])
+        .await;
+    assert_eq!(
+        error_message(&result),
+        "Provider returned no probability for label \"inconclusive\" of decision \"assessment\""
     );
 }
 
@@ -283,7 +311,7 @@ async fn typesafe_missing_answer_is_rejected() {
         .await;
 
     let result = typesafe(&server)
-        .decide(json!({}), vec![classify_question()])
+        .decide(&json!({}), &[classify_question()])
         .await;
     assert_eq!(
         error_message(&result),
@@ -309,17 +337,10 @@ async fn typesafe_missing_confidence_is_accepted() {
         .await;
 
     let response = typesafe(&server)
-        .decide(json!({}), vec![classify_question()])
+        .decide(&json!({}), &[classify_question()])
         .await
         .unwrap();
-    assert!(
-        response
-            .answers
-            .get("assessment")
-            .unwrap()
-            .confidence
-            .is_none()
-    );
+    assert!(response.answers[0].confidence.is_none());
 }
 
 // ---------------------------------------------------------------------------
@@ -353,14 +374,14 @@ async fn openai_classify_happy_path() {
     );
     let response = provider
         .decide(
-            json!({ "source": { "text": "hi" } }),
-            vec![classify_question()],
+            &json!({ "source": { "text": "hi" } }),
+            &[classify_question()],
         )
         .await
         .unwrap();
-    let answer = response.answers.get("assessment").unwrap();
-    assert_eq!(answer.label, "compliant");
-    assert!((answer.probabilities.get("compliant").unwrap() - 0.7).abs() < 1e-12);
+    let answer = &response.answers[0];
+    assert_eq!(CRITERIA[answer.choice].label, "compliant");
+    assert!((answer.probabilities[0] - 0.7).abs() < 1e-12);
     assert_eq!(response.usage.input_tokens, Some(11));
     assert_eq!(response.usage.output_tokens, Some(7));
 
@@ -403,7 +424,7 @@ async fn openai_classify_sends_session_header_for_opencode_go() {
         None,
     );
     provider
-        .decide(json!({}), vec![classify_question()])
+        .decide(&json!({}), &[classify_question()])
         .await
         .unwrap();
 
@@ -444,7 +465,7 @@ async fn openai_classify_missing_answer_is_rejected() {
         Some(1024),
         None,
     );
-    let result = provider.decide(json!({}), vec![classify_question()]).await;
+    let result = provider.decide(&json!({}), &[classify_question()]).await;
     assert_eq!(
         error_message(&result),
         "Provider returned no answer for decision \"assessment\""
@@ -574,28 +595,6 @@ async fn openai_generate_prompt_mode_has_no_response_format() {
 // ---------------------------------------------------------------------------
 // build
 // ---------------------------------------------------------------------------
-
-#[test]
-fn build_unknown_provider_name_is_a_config_error() {
-    let config = test_config(
-        provider_config(
-            "known",
-            ProviderKind::OpenAi,
-            "TRAITS_TEST_BUILD_UNKNOWN",
-            None,
-        ),
-        provider_config(
-            "known2",
-            ProviderKind::OpenAi,
-            "TRAITS_TEST_BUILD_UNKNOWN",
-            None,
-        ),
-    );
-    let mut config = config;
-    config.classify.provider = Some("nope".to_string());
-    let error = build(&config).err().expect("expected a config error");
-    assert!(error.to_string().contains("Unknown provider"), "{error}");
-}
 
 #[test]
 fn build_missing_env_var_is_a_config_error() {

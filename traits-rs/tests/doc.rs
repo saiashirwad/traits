@@ -473,3 +473,43 @@ fn accepts_names_at_the_length_limit() {
     let trait_value = parse(&text, "/traits/test.md").expect("parses");
     assert_eq!(trait_value.name.as_str(), exact);
 }
+
+#[test]
+fn json_names_are_validated_like_stored_names() {
+    for invalid in ["../escape", "with/slash", "Uppercase", ""] {
+        let error = serde_json::from_value::<TraitName>(serde_json::json!(invalid)).unwrap_err();
+        assert!(error.to_string().contains("Invalid trait name"), "{error}");
+    }
+    assert_eq!(
+        serde_json::from_value::<TraitName>(serde_json::json!("delegated-spending")).unwrap(),
+        name("delegated-spending")
+    );
+}
+
+#[test]
+fn json_traits_reject_blank_fields_that_could_not_be_stored() {
+    let mut value = serde_json::to_value(minimal()).unwrap();
+    assert_eq!(
+        serde_json::from_value::<Trait>(value.clone()).unwrap(),
+        minimal()
+    );
+
+    value["subject"] = serde_json::json!("   ");
+    let error = serde_json::from_value::<Trait>(value.clone()).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("field subject must not be blank"),
+        "{error}"
+    );
+
+    value["subject"] = serde_json::json!("A payment.");
+    value["guidance"] = serde_json::json!("");
+    let error = serde_json::from_value::<Trait>(value).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("field guidance must not be blank"),
+        "{error}"
+    );
+}

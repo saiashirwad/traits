@@ -141,13 +141,11 @@ impl std::error::Error for ToolFailure {}
 /// Startup and configuration failures. These keep the MCP server connected and
 /// are surfaced through the fallback tool handlers.
 #[derive(Debug, thiserror::Error)]
-pub enum ConfigError {
-    #[error("{0}")]
-    Message(String),
-}
+#[error("{0}")]
+pub struct ConfigError(String);
 
 impl ConfigError {
     pub fn new(message: impl Into<String>) -> Self {
-        Self::Message(message.into())
+        Self(message.into())
     }
 }

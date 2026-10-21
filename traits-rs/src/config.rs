@@ -1,9 +1,11 @@
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 
 use kdl::{KdlDocument, KdlNode, KdlValue};
 use serde::{Deserialize, Serialize};
 
 use crate::error::ConfigError;
+use crate::files::Excludes;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -99,7 +101,8 @@ pub struct ProviderConfig {
 
 #[derive(Debug, Clone, Default)]
 pub struct OperationConfig {
-    pub provider: Option<String>,
+    /// The operation's provider, or the default provider when it names none.
+    pub provider: Option<ProviderConfig>,
     pub temperature: Option<f64>,
     pub max_tokens: Option<u32>,
 }
@@ -108,41 +111,12 @@ pub struct OperationConfig {
 pub struct Config {
     pub config_root: PathBuf,
     pub store: PathBuf,
-    pub concurrency: usize,
+    pub concurrency: NonZeroUsize,
     pub exclude_gitignored: bool,
-    pub excludes: Vec<String>,
-    pub default_provider: Option<String>,
+    pub excludes: Excludes,
     pub classify: OperationConfig,
     pub generate: OperationConfig,
     pub providers: Vec<ProviderConfig>,
-}
-
-impl Config {
-    pub fn provider(&self, name: &str) -> Option<&ProviderConfig> {
-        self.providers.iter().find(|provider| provider.name == name)
-    }
-
-    pub fn classify_provider(&self) -> Result<&ProviderConfig, ConfigError> {
-        let name = self
-            .classify
-            .provider
-            .as_ref()
-            .or(self.default_provider.as_ref());
-        let name = name.ok_or_else(|| ConfigError::new("No classify provider configured"))?;
-        self.provider(name)
-            .ok_or_else(|| ConfigError::new(format!("Unknown provider \"{name}\"")))
-    }
-
-    pub fn generate_provider(&self) -> Result<&ProviderConfig, ConfigError> {
-        let name = self
-            .generate
-            .provider
-            .as_ref()
-            .or(self.default_provider.as_ref());
-        let name = name.ok_or_else(|| ConfigError::new("No generate provider configured"))?;
-        self.provider(name)
-            .ok_or_else(|| ConfigError::new(format!("Unknown provider \"{name}\"")))
-    }
 }
 
 /// Resolve the current Git worktree root, falling back to `cwd` outside a repository.
@@ -213,9 +187,9 @@ pub fn parse_str(text: &str) -> Result<RawConfig, ConfigError> {
     let mut raw = RawConfig::default();
     for node in document.nodes() {
         match node.name().value() {
-            "version" => raw.version = Some(int_arg(node, 0, "version")? as u32),
+            "version" => raw.version = Some(int_arg(node, 0, "version")?),
             "store" => raw.store = Some(string_arg(node, 0, "store")?),
-            "concurrency" => raw.concurrency = Some(int_arg(node, 0, "concurrency")? as usize),
+            "concurrency" => raw.concurrency = Some(int_arg(node, 0, "concurrency")?),
             "exclude-gitignored" => {
                 raw.exclude_gitignored = Some(bool_flag(node, "exclude-gitignored")?)
             }
@@ -259,7 +233,7 @@ fn provider(node: &KdlNode) -> Result<RawProvider, ConfigError> {
             "reasoning-effort" => {
                 provider.reasoning_effort = Some(string_arg(child, 0, "reasoning-effort")?)
             }
-            "timeout-ms" => provider.timeout_ms = Some(int_arg(child, 0, "timeout-ms")? as u64),
+            "timeout-ms" => provider.timeout_ms = Some(int_arg(child, 0, "timeout-ms")?),
             "header" => provider.header.push((
                 string_arg(child, 0, "header name")?,
                 string_arg(child, 1, "header value")?,
@@ -280,7 +254,7 @@ fn operation(node: &KdlNode, name: &str) -> Result<RawOperation, ConfigError> {
         match child.name().value() {
             "provider" => operation.provider = Some(string_arg(child, 0, "provider")?),
             "temperature" => operation.temperature = Some(float_arg(child, 0, "temperature")?),
-            "max-tokens" => operation.max_tokens = Some(int_arg(child, 0, "max-tokens")? as u32),
+            "max-tokens" => operation.max_tokens = Some(int_arg(child, 0, "max-tokens")?),
             other => {
                 return Err(ConfigError::new(format!(
                     "Unknown node \"{other}\" in {name}"
@@ -305,9 +279,10 @@ fn string_arg(node: &KdlNode, index: usize, what: &str) -> Result<String, Config
     }
 }
 
-fn int_arg(node: &KdlNode, index: usize, what: &str) -> Result<i128, ConfigError> {
+fn int_arg<T: TryFrom<i128>>(node: &KdlNode, index: usize, what: &str) -> Result<T, ConfigError> {
     match node.get(index) {
-        Some(KdlValue::Integer(value)) => Ok(*value),
+        Some(KdlValue::Integer(value)) => T::try_from(*value)
+            .map_err(|_| ConfigError::new(format!("{what} is out of range: {value}"))),
         Some(other) => Err(ConfigError::new(format!(
             "{what} must be an integer, received {other:?}"
         ))),
@@ -424,23 +399,37 @@ pub fn build(raw: RawConfig, root: &Path) -> Result<Config, ConfigError> {
         None => root.join(".agents/traits"),
     };
 
-    let mut excludes = vec![
-        "**/.git".to_string(),
-        "**/.git/**".to_string(),
-        "**/.worktrees".to_string(),
-        "**/.worktrees/**".to_string(),
-    ];
-    excludes.extend(raw.exclude);
+    let operation = |raw_operation: Option<RawOperation>| {
+        let raw_operation = raw_operation.unwrap_or_default();
+        let provider = raw_operation
+            .provider
+            .or_else(|| raw.default_provider.clone())
+            .map(|name| {
+                providers
+                    .iter()
+                    .find(|provider| provider.name == name)
+                    .cloned()
+                    .ok_or_else(|| ConfigError::new(format!("Unknown provider \"{name}\"")))
+            })
+            .transpose()?;
+        Ok::<_, ConfigError>(OperationConfig {
+            provider,
+            temperature: raw_operation.temperature,
+            max_tokens: raw_operation.max_tokens,
+        })
+    };
+    let classify = operation(raw.classify)?;
+    let generate = operation(raw.generate)?;
 
     Ok(Config {
         config_root: root.to_path_buf(),
         store,
-        concurrency: raw.concurrency.unwrap_or(4).max(1),
+        concurrency: NonZeroUsize::new(usize::from(raw.concurrency.unwrap_or(4)))
+            .unwrap_or(NonZeroUsize::MIN),
         exclude_gitignored: raw.exclude_gitignored.unwrap_or(true),
-        excludes,
-        default_provider: raw.default_provider,
-        classify: raw.classify.unwrap_or_default().into(),
-        generate: raw.generate.unwrap_or_default().into(),
+        excludes: Excludes::compile(root, raw.exclude)?,
+        classify,
+        generate,
         providers,
     })
 }
@@ -449,7 +438,7 @@ pub fn build(raw: RawConfig, root: &Path) -> Result<Config, ConfigError> {
 pub struct RawConfig {
     pub version: Option<u32>,
     pub store: Option<String>,
-    pub concurrency: Option<usize>,
+    pub concurrency: Option<u16>,
     pub exclude_gitignored: Option<bool>,
     pub exclude: Vec<String>,
     pub default_provider: Option<String>,
@@ -478,22 +467,20 @@ pub struct RawOperation {
     pub max_tokens: Option<u32>,
 }
 
-impl From<RawOperation> for OperationConfig {
-    fn from(raw: RawOperation) -> Self {
-        Self {
-            provider: raw.provider,
-            temperature: raw.temperature,
-            max_tokens: raw.max_tokens,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn root() -> PathBuf {
         PathBuf::from("/repo")
+    }
+
+    fn provider<'a>(config: &'a Config, name: &str) -> &'a ProviderConfig {
+        config
+            .providers
+            .iter()
+            .find(|provider| provider.name == name)
+            .unwrap()
     }
 
     #[test]
@@ -527,10 +514,9 @@ mod tests {
         )
         .unwrap();
         let config = build(raw, &root()).unwrap();
-        assert_eq!(config.concurrency, 8);
-        assert_eq!(config.default_provider.as_deref(), Some("opencode"));
+        assert_eq!(config.concurrency.get(), 8);
         assert_eq!(config.providers.len(), 2);
-        let opencode = config.provider("opencode").unwrap();
+        let opencode = provider(&config, "opencode");
         assert_eq!(opencode.kind, ProviderKind::OpenCodeGo);
         assert_eq!(
             opencode.base_url,
@@ -538,16 +524,20 @@ mod tests {
         );
         assert_eq!(opencode.api_key_env, "OPENCODE_API_KEY");
         assert_eq!(opencode.json_mode, JsonMode::Object);
-        let decisions = config.provider("decisions").unwrap();
+        let decisions = provider(&config, "decisions");
         assert_eq!(decisions.timeout_ms, 30_000);
         assert_eq!(
             decisions.headers,
             vec![("x-extra".to_string(), "value".to_string())]
         );
-        assert_eq!(config.classify.provider.as_deref(), Some("decisions"));
+        assert_eq!(config.classify.provider.as_ref().unwrap().name, "decisions");
+        assert_eq!(
+            config.generate.provider.as_ref().unwrap().name,
+            "opencode",
+            "generate falls back to the default provider"
+        );
         assert_eq!(config.classify.max_tokens, Some(1024));
-        assert!(config.excludes.contains(&"repos/**".to_string()));
-        assert!(config.excludes.contains(&"**/.git".to_string()));
+        assert_eq!(config.excludes.patterns(), ["repos/**"]);
         assert_eq!(config.store, root().join(".agents/traits"));
         assert!(config.exclude_gitignored);
     }
@@ -602,11 +592,10 @@ mod tests {
         )
         .unwrap();
         let config = build(merge(global, project), &root()).unwrap();
-        assert_eq!(config.concurrency, 8);
+        assert_eq!(config.concurrency.get(), 8);
         assert_eq!(config.providers.len(), 2);
-        assert_eq!(config.provider("a").unwrap().model, "gpt-b");
-        assert!(config.excludes.contains(&"global/**".to_string()));
-        assert!(config.excludes.contains(&"project/**".to_string()));
+        assert_eq!(provider(&config, "a").model, "gpt-b");
+        assert_eq!(config.excludes.patterns(), ["global/**", "project/**"]);
     }
 
     #[test]
@@ -614,6 +603,48 @@ mod tests {
         assert!(parse_str("concurreny 4").is_err());
         let raw = parse_str(r#"provider "x" { kind "mystery" model "m" }"#).unwrap();
         assert!(build(raw, &root()).is_err());
+    }
+
+    #[test]
+    fn rejects_unknown_provider_names_and_out_of_range_integers() {
+        let raw = parse_str(
+            r#"provider "x" { kind "openai"; model "m" }
+            classify { provider "nope" }"#,
+        )
+        .unwrap();
+        let error = build(raw, &root()).unwrap_err();
+        assert_eq!(error.to_string(), "Unknown provider \"nope\"");
+
+        let raw = parse_str(
+            r#"provider "x" { kind "openai"; model "m" }
+            default-provider "missing""#,
+        )
+        .unwrap();
+        assert!(build(raw, &root()).is_err());
+
+        for text in [
+            "concurrency -1",
+            "concurrency 70000",
+            "classify { max-tokens -5 }",
+        ] {
+            let error = parse_str(text).unwrap_err();
+            assert!(
+                error.to_string().contains("out of range"),
+                "{text}: {error}"
+            );
+        }
+        let config = build(parse_str("concurrency 0").unwrap(), &root()).unwrap();
+        assert_eq!(config.concurrency.get(), 1);
+    }
+
+    #[test]
+    fn rejects_invalid_exclude_patterns_at_load() {
+        let raw = parse_str(r#"exclude "src/[unclosed""#).unwrap();
+        let error = build(raw, &root()).unwrap_err();
+        assert!(
+            error.to_string().contains("Invalid exclude pattern"),
+            "{error}"
+        );
     }
 
     #[test]

@@ -5,14 +5,7 @@ use serde_json::{Value, json};
 
 use crate::error::ToolFailure;
 
-use super::{ClassifyAnswer, ClassifyQuestion, DecisionResponse, Usage};
-
-/// Probability drift tolerated per criteria label before a distribution is
-/// rejected, matching Effect's `probabilityPrecision` of 2.
-const DRIFT_PER_LABEL: f64 = 0.005;
-/// Below this drift the distribution is left untouched; above it the values are
-/// rescaled to sum to one.
-const RESCALE_THRESHOLD: f64 = 1e-6;
+use super::{DecisionResponse, Question, Usage, criteria_json, validate_answer};
 
 #[derive(Debug, Deserialize)]
 struct SystemOneResponse {
@@ -53,20 +46,22 @@ pub struct TypeSafeProvider {
 impl super::DecisionModel for TypeSafeProvider {
     async fn decide(
         &self,
-        state: Value,
-        questions: Vec<(String, ClassifyQuestion)>,
+        state: &Value,
+        questions: &[Question<'_>],
     ) -> Result<DecisionResponse, ToolFailure> {
-        let mut encoded_questions = serde_json::Map::with_capacity(questions.len());
-        for (id, question) in &questions {
-            encoded_questions.insert(
-                id.clone(),
-                json!({
-                    "type": "choice",
-                    "instructions": question.instructions,
-                    "criteria": question.criteria,
-                }),
-            );
-        }
+        let encoded_questions = questions
+            .iter()
+            .map(|question| {
+                (
+                    question.id.to_string(),
+                    json!({
+                        "type": "choice",
+                        "instructions": question.instructions,
+                        "criteria": criteria_json(question.criteria),
+                    }),
+                )
+            })
+            .collect::<serde_json::Map<_, _>>();
         let body = json!({
             "model": self.model,
             "state": state,
@@ -102,7 +97,36 @@ impl super::DecisionModel for TypeSafeProvider {
             ToolFailure::ai(format!("TypeSafe returned invalid JSON: {error}: {text}"))
         })?;
 
-        let answers = validate_answers(&questions, &parsed.answers)?;
+        let answers = questions
+            .iter()
+            .map(|question| {
+                let id = question.id;
+                let answer = parsed.answers.get(id).ok_or_else(|| {
+                    ToolFailure::ai(format!("Provider returned no answer for decision \"{id}\""))
+                })?;
+                let confidence = match &answer.confidence {
+                    Value::Null => None,
+                    value => Some(
+                        value
+                            .as_f64()
+                            .filter(|confidence| {
+                                confidence.is_finite() && (0.0..=1.0).contains(confidence)
+                            })
+                            .ok_or_else(|| {
+                                ToolFailure::ai(format!(
+                                    "Provider returned confidence outside [0, 1] for decision \"{id}\""
+                                ))
+                            })?,
+                    ),
+                };
+                validate_answer(
+                    question,
+                    answer.choice.as_str(),
+                    |label| answer.probabilities.get(label).and_then(Value::as_f64),
+                    confidence,
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         let usage = parsed
             .usage
             .map(|usage| Usage {
@@ -113,82 +137,4 @@ impl super::DecisionModel for TypeSafeProvider {
 
         Ok(DecisionResponse { answers, usage })
     }
-}
-
-/// Validate the System One answers against the requested questions, mirroring
-/// the Effect `DecisionModel` checks.
-fn validate_answers(
-    questions: &[(String, ClassifyQuestion)],
-    raw_answers: &IndexMap<String, SystemOneAnswer>,
-) -> Result<IndexMap<String, ClassifyAnswer>, ToolFailure> {
-    let mut answers = IndexMap::with_capacity(questions.len());
-    for (id, question) in questions {
-        let answer = raw_answers.get(id).ok_or_else(|| {
-            ToolFailure::ai(format!("Provider returned no answer for decision \"{id}\""))
-        })?;
-
-        let label = answer
-            .choice
-            .as_str()
-            .filter(|label| question.criteria.contains_key(*label))
-            .ok_or_else(|| {
-                ToolFailure::ai(format!(
-                    "Provider returned an unknown label for decision \"{id}\""
-                ))
-            })?;
-
-        let mut probabilities = IndexMap::with_capacity(question.criteria.len());
-        let mut total = 0.0;
-        for criterion in question.criteria.keys() {
-            let probability = answer
-                .probabilities
-                .get(criterion)
-                .and_then(Value::as_f64)
-                .filter(|probability| probability.is_finite() && (0.0..=1.0).contains(probability))
-                .ok_or_else(|| {
-                    ToolFailure::ai(format!(
-                        "Provider returned no probability for label \"{criterion}\" of decision \"{id}\""
-                    ))
-                })?;
-            total += probability;
-            probabilities.insert(criterion.clone(), probability);
-        }
-
-        let tolerance = question.criteria.len() as f64 * DRIFT_PER_LABEL + RESCALE_THRESHOLD;
-        let drift = (total - 1.0).abs();
-        if total == 0.0 || drift > tolerance {
-            return Err(ToolFailure::ai(format!(
-                "Provider returned probabilities that do not sum to 1 for decision \"{id}\""
-            )));
-        }
-        if drift > RESCALE_THRESHOLD {
-            for probability in probabilities.values_mut() {
-                *probability /= total;
-            }
-        }
-
-        let confidence = match &answer.confidence {
-            Value::Null => None,
-            value => Some(
-                value
-                    .as_f64()
-                    .filter(|confidence| confidence.is_finite() && (0.0..=1.0).contains(confidence))
-                    .ok_or_else(|| {
-                        ToolFailure::ai(format!(
-                            "Provider returned confidence outside [0, 1] for decision \"{id}\""
-                        ))
-                    })?,
-            ),
-        };
-
-        answers.insert(
-            id.clone(),
-            ClassifyAnswer {
-                label: label.to_string(),
-                probabilities,
-                confidence,
-            },
-        );
-    }
-    Ok(answers)
 }

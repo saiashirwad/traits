@@ -3,16 +3,16 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use indexmap::IndexMap;
 use serde_json::Value;
 
 use traits::batching::check_traits;
 use traits::config::{Config, OperationConfig};
 use traits::doc::{Classification, Trait, TraitName};
 use traits::error::ToolFailure;
+use traits::files::Excludes;
 use traits::provider::{
-    ClassifyAnswer, ClassifyQuestion, DecisionModel, DecisionResponse, GenerateRequest,
-    LanguageModel, Models, Usage,
+    Answer, DecisionModel, DecisionResponse, GenerateRequest, LanguageModel, Models, Question,
+    Usage,
 };
 use traits::store::TraitStore;
 
@@ -57,34 +57,34 @@ struct MockDecision {
 impl DecisionModel for MockDecision {
     async fn decide(
         &self,
-        _state: Value,
-        questions: Vec<(String, ClassifyQuestion)>,
+        _state: &Value,
+        questions: &[Question<'_>],
     ) -> Result<DecisionResponse, ToolFailure> {
-        let mut answers = IndexMap::new();
-        for (name, _) in questions {
-            let label = if self.violation.contains(&name) {
-                "violation"
-            } else if self.inconclusive.contains(&name) {
-                "inconclusive"
-            } else {
-                "compliant"
-            };
-            let mut probabilities = IndexMap::new();
-            for candidate in ["compliant", "violation", "not-applicable", "inconclusive"] {
-                probabilities.insert(
-                    candidate.to_string(),
-                    if candidate == label { 1.0 } else { 0.0 },
-                );
-            }
-            answers.insert(
-                name,
-                ClassifyAnswer {
-                    label: label.to_string(),
+        let answers = questions
+            .iter()
+            .map(|question| {
+                let name = question.id.to_string();
+                let label = if self.violation.contains(&name) {
+                    "violation"
+                } else if self.inconclusive.contains(&name) {
+                    "inconclusive"
+                } else {
+                    "compliant"
+                };
+                let choice = question
+                    .criteria
+                    .iter()
+                    .position(|criterion| criterion.label == label)
+                    .unwrap();
+                let mut probabilities = vec![0.0; question.criteria.len()];
+                probabilities[choice] = 1.0;
+                Answer {
+                    choice,
                     probabilities,
                     confidence: None,
-                },
-            );
-        }
+                }
+            })
+            .collect();
         Ok(DecisionResponse {
             answers,
             usage: Usage::default(),
@@ -105,7 +105,7 @@ impl LanguageModel for NopLanguage {
 
 fn trait_named(name: &str) -> Trait {
     Trait {
-        name: TraitName(name.to_string()),
+        name: TraitName::parse(name).unwrap(),
         subject: "Binding declarations.".to_string(),
         requirement: "Prefer const declarations.".to_string(),
         applicability: None,
@@ -119,10 +119,9 @@ fn config_for(root: &std::path::Path) -> Config {
     Config {
         config_root: root.to_path_buf(),
         store: root.join("traits"),
-        concurrency: 4,
+        concurrency: std::num::NonZeroUsize::new(4).unwrap(),
         exclude_gitignored: false,
-        excludes: Vec::new(),
-        default_provider: None,
+        excludes: Excludes::default(),
         classify: OperationConfig::default(),
         generate: OperationConfig::default(),
         providers: Vec::new(),
@@ -275,7 +274,7 @@ async fn unknown_trait_names_fail_and_empty_selections_return_nothing() {
         &store,
         &models,
         &["f.ts".to_string()],
-        Some(&[TraitName("does-not-exist".to_string())]),
+        Some(&[TraitName::parse("does-not-exist").unwrap()]),
         None,
     )
     .await
@@ -302,4 +301,100 @@ async fn unknown_trait_names_fail_and_empty_selections_return_nothing() {
     .await
     .unwrap();
     assert!(focused.is_empty());
+}
+
+#[derive(Default)]
+struct Probe {
+    fail_first: bool,
+    calls: std::sync::atomic::AtomicUsize,
+    in_flight: std::sync::atomic::AtomicUsize,
+    peak: std::sync::atomic::AtomicUsize,
+}
+
+#[async_trait]
+impl DecisionModel for Probe {
+    async fn decide(
+        &self,
+        state: &Value,
+        questions: &[Question<'_>],
+    ) -> Result<DecisionResponse, ToolFailure> {
+        use std::sync::atomic::Ordering::SeqCst;
+        if self.calls.fetch_add(1, SeqCst) == 0 && self.fail_first {
+            return Err(ToolFailure::ai("first request failed"));
+        }
+        let now = self.in_flight.fetch_add(1, SeqCst) + 1;
+        self.peak.fetch_max(now, SeqCst);
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        self.in_flight.fetch_sub(1, SeqCst);
+        MockDecision::default().decide(state, questions).await
+    }
+}
+
+fn probe_models(probe: &Arc<Probe>) -> Models {
+    let decision: Arc<dyn DecisionModel> = probe.clone();
+    Models {
+        decision,
+        language: None,
+    }
+}
+
+#[tokio::test]
+async fn concurrency_bounds_every_in_flight_request() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let include: Vec<String> = (0..4)
+        .map(|index| {
+            let name = format!("f{index}.ts");
+            std::fs::write(root.join(&name), "const value = 1").unwrap();
+            name
+        })
+        .collect();
+    let store = MockStore {
+        traits: (0..48)
+            .map(|index| trait_named(&format!("example-trait-{index}")))
+            .collect(),
+    };
+    let probe = Arc::new(Probe::default());
+    let mut config = config_for(root);
+    config.concurrency = std::num::NonZeroUsize::new(2).unwrap();
+
+    check_traits(&config, &store, &probe_models(&probe), &include, None, None)
+        .await
+        .unwrap();
+
+    let calls = probe.calls.load(std::sync::atomic::Ordering::SeqCst);
+    assert!(calls >= 8, "each file needs several batches, made {calls}");
+    assert_eq!(probe.peak.load(std::sync::atomic::Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn a_failed_request_stops_the_remaining_batches() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let include: Vec<String> = (0..10)
+        .map(|index| {
+            let name = format!("f{index}.ts");
+            std::fs::write(root.join(&name), "const value = 1").unwrap();
+            name
+        })
+        .collect();
+    let store = MockStore {
+        traits: vec![trait_named("always-compliant")],
+    };
+    let probe = Arc::new(Probe {
+        fail_first: true,
+        ..Probe::default()
+    });
+    let mut config = config_for(root);
+    config.concurrency = std::num::NonZeroUsize::new(2).unwrap();
+
+    let error = check_traits(&config, &store, &probe_models(&probe), &include, None, None)
+        .await
+        .unwrap_err();
+
+    assert!(matches!(error, ToolFailure::AiError { .. }), "{error:?}");
+    assert!(
+        probe.calls.load(std::sync::atomic::Ordering::SeqCst) <= 2,
+        "no batch starts after the failure"
+    );
 }
