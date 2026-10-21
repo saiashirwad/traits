@@ -160,6 +160,11 @@ pub async fn check_traits(
             paths.push(absolute);
         }
     }
+    tracing::debug!(
+        traits = traits.len(),
+        files = paths.len(),
+        "check_traits resolved selection"
+    );
 
     struct Work {
         traits: Vec<Trait>,

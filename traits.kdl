@@ -1,0 +1,23 @@
+version 1
+concurrency 4
+exclude "repos/**"
+
+provider "typesafe" {
+    kind "typesafe"
+    model "jev-latest"
+    api-key-env "TYPESAFE_API_KEY"
+}
+
+provider "opencode" {
+    kind "opencode-go"
+    model "deepseek-v4.1-flash"
+    api-key-env "OPENCODE_API_KEY"
+}
+
+classify {
+    provider "typesafe"
+}
+
+generate {
+    provider "opencode"
+}
