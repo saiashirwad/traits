@@ -138,10 +138,8 @@ fn resolve_api_key(provider: &ProviderConfig) -> Result<String, ConfigError> {
 }
 
 fn resolve_base_url(provider: &ProviderConfig) -> Result<String, ConfigError> {
-    if let Some(base_url) = &provider.base_url
-        && !base_url.is_empty()
-    {
-        return Ok(base_url.clone());
+    if !provider.base_url.is_empty() {
+        return Ok(provider.base_url.clone());
     }
     default_base_url(provider.kind)
         .map(str::to_string)

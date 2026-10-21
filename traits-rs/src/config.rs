@@ -123,14 +123,22 @@ impl Config {
     }
 
     pub fn classify_provider(&self) -> Result<&ProviderConfig, ConfigError> {
-        let name = self.classify.provider.as_ref().or(self.default_provider.as_ref());
+        let name = self
+            .classify
+            .provider
+            .as_ref()
+            .or(self.default_provider.as_ref());
         let name = name.ok_or_else(|| ConfigError::new("No classify provider configured"))?;
         self.provider(name)
             .ok_or_else(|| ConfigError::new(format!("Unknown provider \"{name}\"")))
     }
 
     pub fn generate_provider(&self) -> Result<&ProviderConfig, ConfigError> {
-        let name = self.generate.provider.as_ref().or(self.default_provider.as_ref());
+        let name = self
+            .generate
+            .provider
+            .as_ref()
+            .or(self.default_provider.as_ref());
         let name = name.ok_or_else(|| ConfigError::new("No generate provider configured"))?;
         self.provider(name)
             .ok_or_else(|| ConfigError::new(format!("Unknown provider \"{name}\"")))
@@ -146,7 +154,11 @@ pub fn worktree_root(cwd: &Path) -> PathBuf {
     match output {
         Ok(output) if output.status.success() => {
             let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if text.is_empty() { cwd.to_path_buf() } else { PathBuf::from(text) }
+            if text.is_empty() {
+                cwd.to_path_buf()
+            } else {
+                PathBuf::from(text)
+            }
         }
         _ => cwd.to_path_buf(),
     }
@@ -176,7 +188,10 @@ pub fn load(cwd: &Path, explicit: Option<&Path>) -> Result<Config, ConfigError> 
     let project = match project_path {
         Some(path) if path.exists() => parse_file(&path)?,
         Some(path) if explicit.is_some() => {
-            return Err(ConfigError::new(format!("Config file {} does not exist", path.display())));
+            return Err(ConfigError::new(format!(
+                "Config file {} does not exist",
+                path.display()
+            )));
         }
         _ => RawConfig::default(),
     };
@@ -187,20 +202,27 @@ pub fn load(cwd: &Path, explicit: Option<&Path>) -> Result<Config, ConfigError> 
 pub fn parse_file(path: &Path) -> Result<RawConfig, ConfigError> {
     let text = std::fs::read_to_string(path)
         .map_err(|error| ConfigError::new(format!("Unable to read {}: {error}", path.display())))?;
-    parse_str(&text).map_err(|error| ConfigError::new(format!("Invalid config {}: {error}", path.display())))
+    parse_str(&text)
+        .map_err(|error| ConfigError::new(format!("Invalid config {}: {error}", path.display())))
 }
 
 pub fn parse_str(text: &str) -> Result<RawConfig, ConfigError> {
-    let document: KdlDocument = text.parse().map_err(|error| ConfigError::new(format!("{error}")))?;
+    let document: KdlDocument = text
+        .parse()
+        .map_err(|error| ConfigError::new(format!("{error}")))?;
     let mut raw = RawConfig::default();
     for node in document.nodes() {
         match node.name().value() {
             "version" => raw.version = Some(int_arg(node, 0, "version")? as u32),
             "store" => raw.store = Some(string_arg(node, 0, "store")?),
             "concurrency" => raw.concurrency = Some(int_arg(node, 0, "concurrency")? as usize),
-            "exclude-gitignored" => raw.exclude_gitignored = Some(bool_flag(node, "exclude-gitignored")?),
+            "exclude-gitignored" => {
+                raw.exclude_gitignored = Some(bool_flag(node, "exclude-gitignored")?)
+            }
             "exclude" => raw.exclude.push(string_arg(node, 0, "exclude")?),
-            "default-provider" => raw.default_provider = Some(string_arg(node, 0, "default-provider")?),
+            "default-provider" => {
+                raw.default_provider = Some(string_arg(node, 0, "default-provider")?)
+            }
             "provider" => raw.provider.push(provider(node)?),
             "classify" => raw.classify = Some(operation(node, "classify")?),
             "generate" => raw.generate = Some(operation(node, "generate")?),
@@ -231,12 +253,17 @@ fn provider(node: &KdlNode) -> Result<RawProvider, ConfigError> {
             "model" => provider.model = Some(string_arg(child, 0, "model")?),
             "api-key-env" => provider.api_key_env = Some(string_arg(child, 0, "api-key-env")?),
             "base-url" => provider.base_url = Some(string_arg(child, 0, "base-url")?),
-            "json-mode" => provider.json_mode = Some(JsonMode::parse(&string_arg(child, 0, "json-mode")?)?),
-            "reasoning-effort" => provider.reasoning_effort = Some(string_arg(child, 0, "reasoning-effort")?),
+            "json-mode" => {
+                provider.json_mode = Some(JsonMode::parse(&string_arg(child, 0, "json-mode")?)?)
+            }
+            "reasoning-effort" => {
+                provider.reasoning_effort = Some(string_arg(child, 0, "reasoning-effort")?)
+            }
             "timeout-ms" => provider.timeout_ms = Some(int_arg(child, 0, "timeout-ms")? as u64),
-            "header" => provider
-                .header
-                .push((string_arg(child, 0, "header name")?, string_arg(child, 1, "header value")?)),
+            "header" => provider.header.push((
+                string_arg(child, 0, "header name")?,
+                string_arg(child, 1, "header value")?,
+            )),
             other => {
                 return Err(ConfigError::new(format!(
                     "Unknown node \"{other}\" in provider \"{name}\""
@@ -255,7 +282,9 @@ fn operation(node: &KdlNode, name: &str) -> Result<RawOperation, ConfigError> {
             "temperature" => operation.temperature = Some(float_arg(child, 0, "temperature")?),
             "max-tokens" => operation.max_tokens = Some(int_arg(child, 0, "max-tokens")? as u32),
             other => {
-                return Err(ConfigError::new(format!("Unknown node \"{other}\" in {name}")));
+                return Err(ConfigError::new(format!(
+                    "Unknown node \"{other}\" in {name}"
+                )));
             }
         }
     }
@@ -310,7 +339,10 @@ fn bool_flag(node: &KdlNode, what: &str) -> Result<bool, ConfigError> {
 pub fn merge(global: RawConfig, project: RawConfig) -> RawConfig {
     let mut providers = global.provider;
     for incoming in project.provider {
-        match providers.iter_mut().find(|provider| provider.name == incoming.name) {
+        match providers
+            .iter_mut()
+            .find(|provider| provider.name == incoming.name)
+        {
             Some(existing) => *existing = incoming,
             None => providers.push(incoming),
         }
@@ -330,7 +362,10 @@ pub fn merge(global: RawConfig, project: RawConfig) -> RawConfig {
     }
 }
 
-fn merge_operation(global: Option<RawOperation>, project: Option<RawOperation>) -> Option<RawOperation> {
+fn merge_operation(
+    global: Option<RawOperation>,
+    project: Option<RawOperation>,
+) -> Option<RawOperation> {
     match (global, project) {
         (None, None) => None,
         (Some(global), None) => Some(global),
@@ -346,22 +381,29 @@ fn merge_operation(global: Option<RawOperation>, project: Option<RawOperation>) 
 pub fn build(raw: RawConfig, root: &Path) -> Result<Config, ConfigError> {
     let mut providers = Vec::new();
     for raw_provider in raw.provider {
-        let kind_name = raw_provider
-            .kind
-            .ok_or_else(|| ConfigError::new(format!("Provider \"{}\" requires kind", raw_provider.name)))?;
+        let kind_name = raw_provider.kind.ok_or_else(|| {
+            ConfigError::new(format!("Provider \"{}\" requires kind", raw_provider.name))
+        })?;
         let kind = ProviderKind::parse(&kind_name)?;
-        let model = raw_provider
-            .model
-            .ok_or_else(|| ConfigError::new(format!("Provider \"{}\" requires model", raw_provider.name)))?;
+        let model = raw_provider.model.ok_or_else(|| {
+            ConfigError::new(format!("Provider \"{}\" requires model", raw_provider.name))
+        })?;
         let base_url = raw_provider
             .base_url
             .or_else(|| kind.base_url().map(str::to_string))
-            .ok_or_else(|| ConfigError::new(format!("Provider \"{}\" requires base-url", raw_provider.name)))?;
+            .ok_or_else(|| {
+                ConfigError::new(format!(
+                    "Provider \"{}\" requires base-url",
+                    raw_provider.name
+                ))
+            })?;
         providers.push(ProviderConfig {
             name: raw_provider.name,
             kind,
             model,
-            api_key_env: raw_provider.api_key_env.unwrap_or_else(|| kind.api_key_env().to_string()),
+            api_key_env: raw_provider
+                .api_key_env
+                .unwrap_or_else(|| kind.api_key_env().to_string()),
             base_url,
             json_mode: raw_provider.json_mode.unwrap_or_else(|| kind.json_mode()),
             reasoning_effort: raw_provider.reasoning_effort,
@@ -373,7 +415,11 @@ pub fn build(raw: RawConfig, root: &Path) -> Result<Config, ConfigError> {
     let store = match raw.store {
         Some(store) => {
             let path = PathBuf::from(store);
-            if path.is_absolute() { path } else { root.join(path) }
+            if path.is_absolute() {
+                path
+            } else {
+                root.join(path)
+            }
         }
         None => root.join(".agents/traits"),
     };
@@ -486,12 +532,18 @@ mod tests {
         assert_eq!(config.providers.len(), 2);
         let opencode = config.provider("opencode").unwrap();
         assert_eq!(opencode.kind, ProviderKind::OpenCodeGo);
-        assert_eq!(opencode.base_url, "https://opencode.ai/inference/go/openai/v1");
+        assert_eq!(
+            opencode.base_url,
+            "https://opencode.ai/inference/go/openai/v1"
+        );
         assert_eq!(opencode.api_key_env, "OPENCODE_API_KEY");
         assert_eq!(opencode.json_mode, JsonMode::Object);
         let decisions = config.provider("decisions").unwrap();
         assert_eq!(decisions.timeout_ms, 30_000);
-        assert_eq!(decisions.headers, vec![("x-extra".to_string(), "value".to_string())]);
+        assert_eq!(
+            decisions.headers,
+            vec![("x-extra".to_string(), "value".to_string())]
+        );
         assert_eq!(config.classify.provider.as_deref(), Some("decisions"));
         assert_eq!(config.classify.max_tokens, Some(1024));
         assert!(config.excludes.contains(&"repos/**".to_string()));

@@ -11,7 +11,8 @@ use traits::config::{Config, OperationConfig};
 use traits::doc::{Classification, Trait, TraitName};
 use traits::error::ToolFailure;
 use traits::provider::{
-    ClassifyAnswer, ClassifyQuestion, DecisionModel, DecisionResponse, GenerateRequest, LanguageModel, Models, Usage,
+    ClassifyAnswer, ClassifyQuestion, DecisionModel, DecisionResponse, GenerateRequest,
+    LanguageModel, Models, Usage,
 };
 use traits::store::TraitStore;
 
@@ -70,14 +71,24 @@ impl DecisionModel for MockDecision {
             };
             let mut probabilities = IndexMap::new();
             for candidate in ["compliant", "violation", "not-applicable", "inconclusive"] {
-                probabilities.insert(candidate.to_string(), if candidate == label { 1.0 } else { 0.0 });
+                probabilities.insert(
+                    candidate.to_string(),
+                    if candidate == label { 1.0 } else { 0.0 },
+                );
             }
             answers.insert(
                 name,
-                ClassifyAnswer { label: label.to_string(), probabilities, confidence: None },
+                ClassifyAnswer {
+                    label: label.to_string(),
+                    probabilities,
+                    confidence: None,
+                },
             );
         }
-        Ok(DecisionResponse { answers, usage: Usage::default() })
+        Ok(DecisionResponse {
+            answers,
+            usage: Usage::default(),
+        })
     }
 }
 
@@ -86,7 +97,9 @@ struct NopLanguage;
 #[async_trait]
 impl LanguageModel for NopLanguage {
     async fn generate_object(&self, _request: GenerateRequest) -> Result<Value, ToolFailure> {
-        Err(ToolFailure::platform("language model is not available in tests"))
+        Err(ToolFailure::platform(
+            "language model is not available in tests",
+        ))
     }
 }
 
@@ -117,7 +130,10 @@ fn config_for(root: &std::path::Path) -> Config {
 }
 
 fn lines(count: usize) -> String {
-    (1..=count).map(|index| format!("line {index}")).collect::<Vec<_>>().join("\n")
+    (1..=count)
+        .map(|index| format!("line {index}"))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn models(violation: &[&str]) -> Models {
@@ -125,7 +141,10 @@ fn models(violation: &[&str]) -> Models {
         violation: violation.iter().map(|name| (*name).to_string()).collect(),
         inconclusive: Vec::new(),
     });
-    Models { decision, language: Arc::new(NopLanguage) }
+    Models {
+        decision,
+        language: Arc::new(NopLanguage),
+    }
 }
 
 fn start_lines(findings: &[traits::doc::TraitEvaluation]) -> Vec<(String, u32)> {
@@ -155,7 +174,10 @@ async fn chunks_files_at_two_hundred_lines_and_keeps_review_findings() {
     std::fs::write(root.join("ftrail.ts"), format!("{}\n", lines(200))).unwrap();
 
     let store = MockStore {
-        traits: vec![trait_named("always-violation"), trait_named("always-compliant")],
+        traits: vec![
+            trait_named("always-violation"),
+            trait_named("always-compliant"),
+        ],
     };
     let models = models(&["always-violation"]);
     let include: Vec<String> = ["f199.ts", "f200.ts", "f201.ts", "ftrail.ts"]
@@ -200,19 +222,42 @@ async fn empty_file_yields_a_single_chunk_and_ignore_directives_skip_traits() {
     .unwrap();
 
     let store = MockStore {
-        traits: vec![trait_named("always-violation"), trait_named("always-compliant")],
+        traits: vec![
+            trait_named("always-violation"),
+            trait_named("always-compliant"),
+        ],
     };
     let models = models(&["always-violation"]);
 
-    let empty = check_traits(&config_for(root), &store, &models, &["empty.ts".to_string()], None, None)
-        .await
-        .unwrap();
-    assert_eq!(start_lines(&empty), vec![(root.join("empty.ts").to_string_lossy().into_owned(), 1)]);
+    let empty = check_traits(
+        &config_for(root),
+        &store,
+        &models,
+        &["empty.ts".to_string()],
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        start_lines(&empty),
+        vec![(root.join("empty.ts").to_string_lossy().into_owned(), 1)]
+    );
 
-    let ignored = check_traits(&config_for(root), &store, &models, &["ignored.ts".to_string()], None, None)
-        .await
-        .unwrap();
-    assert!(ignored.is_empty(), "the violating trait is ignored for the whole file");
+    let ignored = check_traits(
+        &config_for(root),
+        &store,
+        &models,
+        &["ignored.ts".to_string()],
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    assert!(
+        ignored.is_empty(),
+        "the violating trait is ignored for the whole file"
+    );
 }
 
 #[tokio::test]
@@ -220,7 +265,9 @@ async fn unknown_trait_names_fail_and_empty_selections_return_nothing() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     std::fs::write(root.join("f.ts"), "const value = 1").unwrap();
-    let store = MockStore { traits: vec![trait_named("always-violation")] };
+    let store = MockStore {
+        traits: vec![trait_named("always-violation")],
+    };
     let models = models(&["always-violation"]);
 
     let missing = check_traits(
@@ -233,14 +280,26 @@ async fn unknown_trait_names_fail_and_empty_selections_return_nothing() {
     )
     .await
     .unwrap_err();
-    assert!(matches!(missing, ToolFailure::TraitNotFoundError { .. }), "got {missing:?}");
+    assert!(
+        matches!(missing, ToolFailure::TraitNotFoundError { .. }),
+        "got {missing:?}"
+    );
 
-    let none = check_traits(&config_for(root), &store, &models, &[], None, None).await.unwrap();
+    let none = check_traits(&config_for(root), &store, &models, &[], None, None)
+        .await
+        .unwrap();
     assert!(none.is_empty());
 
     let selected_none: Vec<TraitName> = Vec::new();
-    let focused = check_traits(&config_for(root), &store, &models, &["f.ts".to_string()], Some(&selected_none), None)
-        .await
-        .unwrap();
+    let focused = check_traits(
+        &config_for(root),
+        &store,
+        &models,
+        &["f.ts".to_string()],
+        Some(&selected_none),
+        None,
+    )
+    .await
+    .unwrap();
     assert!(focused.is_empty());
 }

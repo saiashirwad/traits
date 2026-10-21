@@ -8,9 +8,9 @@ use async_trait::async_trait;
 use futures::future::join_all;
 use indexmap::{IndexMap, IndexSet};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
-use crate::conflict::{self, answer_label, FailReason, TraitConflict};
+use crate::conflict::{self, FailReason, TraitConflict, answer_label};
 use crate::doc::{Trait, TraitName};
 use crate::error::ToolFailure;
 use crate::provider::{ClassifyQuestion, GenerateRequest, Models};
@@ -29,7 +29,11 @@ pub enum Approval {
 /// elicitation combine; derivation only consumes the returned outcome.
 #[async_trait]
 pub trait Approver: Send + Sync {
-    async fn request(&self, message: String, approved: Option<bool>) -> Result<Approval, ToolFailure>;
+    async fn request(
+        &self,
+        message: String,
+        approved: Option<bool>,
+    ) -> Result<Approval, ToolFailure>;
 }
 
 pub struct DeriveParams {
@@ -79,7 +83,9 @@ pub enum TraitDerivation {
 fn approval_outcome(approval: Approval) -> Option<TraitDerivation> {
     match approval {
         Approval::Approved {} => None,
-        Approval::ApprovalRequired { message } => Some(TraitDerivation::ApprovalRequired { message }),
+        Approval::ApprovalRequired { message } => {
+            Some(TraitDerivation::ApprovalRequired { message })
+        }
         Approval::RevisionRequired { feedback } => {
             Some(TraitDerivation::RevisionRequired { feedback })
         }
@@ -105,47 +111,8 @@ fn review_instructions(traits: &[Trait]) -> String {
 }
 
 /// Serialize a trait into the canonical stored frontmatter plus Markdown body.
-///
-/// `doc::serialize` owns this responsibility; it is still a stub delegated to
-/// the docstore slice, so derivation carries a self-contained serializer for
-/// its decision input and approval messages.
 fn serialize_trait(trait_value: &Trait) -> String {
-    let mut out = String::from("---\n");
-    out.push_str(&format!("name: {}\n", trait_value.name.as_str()));
-    push_yaml(&mut out, "subject", &trait_value.subject);
-    push_yaml(&mut out, "requirement", &trait_value.requirement);
-    if let Some(applicability) = &trait_value.applicability {
-        push_yaml(&mut out, "applicability", applicability);
-    }
-    push_yaml(&mut out, "purpose", &trait_value.purpose);
-    if let Some(guidance) = &trait_value.guidance {
-        push_yaml(&mut out, "guidance", guidance);
-    }
-    out.push_str("---\n");
-    if let Some(context) = &trait_value.context {
-        out.push_str(context);
-    }
-    out
-}
-
-fn push_yaml(out: &mut String, key: &str, value: &str) {
-    out.push_str(key);
-    out.push_str(": ");
-    out.push_str(&yaml_scalar(value));
-    out.push('\n');
-}
-
-fn yaml_scalar(value: &str) -> String {
-    let needs_quotes = value.is_empty()
-        || value.contains('\n')
-        || value.contains(": ")
-        || value.contains(" #")
-        || value.starts_with(|character: char| "-?:,[]{}#&*!|>'\"%@` ".contains(character));
-    if needs_quotes {
-        format!("{value:?}")
-    } else {
-        value.to_string()
-    }
+    crate::doc::serialize(trait_value)
 }
 
 /// Derive a stored trait from a proposal, consulting every existing trait.
@@ -172,10 +139,15 @@ pub async fn derive(
         .filter(|result| matches!(result, TraitConflict::Fail { .. }))
         .cloned()
         .collect::<Vec<_>>();
-    if failures
-        .iter()
-        .any(|failure| matches!(failure, TraitConflict::Fail { reason: FailReason::Inconclusive, .. }))
-    {
+    if failures.iter().any(|failure| {
+        matches!(
+            failure,
+            TraitConflict::Fail {
+                reason: FailReason::Inconclusive,
+                ..
+            }
+        )
+    }) {
         return Ok(TraitDerivation::Inconclusive { findings: failures });
     }
     if !failures.is_empty() {
@@ -186,7 +158,15 @@ pub async fn derive(
                 _ => None,
             })
             .collect::<Vec<_>>();
-        return reconcile(models, store, approver, existing, proposed_trait, params.approved).await;
+        return reconcile(
+            models,
+            store,
+            approver,
+            existing,
+            proposed_trait,
+            params.approved,
+        )
+        .await;
     }
 
     let covered = results
@@ -239,7 +219,10 @@ pub async fn derive(
         });
     }
 
-    if traits.iter().any(|trait_value| trait_value.name == proposed_trait.name) {
+    if traits
+        .iter()
+        .any(|trait_value| trait_value.name == proposed_trait.name)
+    {
         return Err(ToolFailure::already_exists(proposed_trait.name.as_str()));
     }
     let message = format!(
@@ -290,7 +273,11 @@ async fn reconcile(
     let documents = traits.iter().map(serialize_trait).collect::<Vec<_>>();
     let proposal_text = serialize_trait(&proposal);
     let (existing_decomposed, proposed_decomposed) = futures::join!(
-        join_all(documents.iter().map(|document| check_decomposability(models, document))),
+        join_all(
+            documents
+                .iter()
+                .map(|document| check_decomposability(models, document))
+        ),
         check_decomposability(models, &proposal_text),
     );
     let existing_decomposed = existing_decomposed
@@ -351,10 +338,13 @@ async fn reconcile(
         strict: true,
     };
     let response = models.language.generate_object(request).await?;
-    let generated = serde_json::from_value::<GeneratedTraits>(response)
-        .map_err(|error| ToolFailure::ai(format!("Language model returned invalid traits: {error}")))?;
+    let generated = serde_json::from_value::<GeneratedTraits>(response).map_err(|error| {
+        ToolFailure::ai(format!("Language model returned invalid traits: {error}"))
+    })?;
     if generated.traits.is_empty() {
-        return Err(ToolFailure::ai("Language model returned no replacement traits"));
+        return Err(ToolFailure::ai(
+            "Language model returned no replacement traits",
+        ));
     }
 
     let mut replacement_names = IndexSet::<TraitName>::new();
@@ -454,14 +444,20 @@ async fn check_decomposability(
     };
     let response = models.language.generate_object(request).await?;
     let generated = serde_json::from_value::<DecomposedTraits>(response).map_err(|error| {
-        ToolFailure::ai(format!("Language model returned invalid decomposition: {error}"))
+        ToolFailure::ai(format!(
+            "Language model returned invalid decomposition: {error}"
+        ))
     })?;
     if generated.traits.len() < 2 {
         return Err(ToolFailure::ai(
             "Language model returned fewer than two decomposed traits",
         ));
     }
-    if generated.traits.iter().any(|trait_text| trait_text.trim().is_empty()) {
+    if generated
+        .traits
+        .iter()
+        .any(|trait_text| trait_text.trim().is_empty())
+    {
         return Err(ToolFailure::ai(
             "Language model returned an empty decomposed trait",
         ));

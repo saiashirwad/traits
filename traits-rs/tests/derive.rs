@@ -8,10 +8,10 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use indexmap::IndexMap;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use traits::conflict::{FailReason, TraitConflict};
-use traits::derive::{derive, Approval, Approver, DeriveParams, TraitDerivation};
+use traits::derive::{Approval, Approver, DeriveParams, TraitDerivation, derive};
 use traits::doc::{Trait, TraitName};
 use traits::error::ToolFailure;
 use traits::provider::{
@@ -116,7 +116,13 @@ impl DecisionModel for MockDecision {
                         .unwrap_or_else(|| panic!("missing relationship for {name}"));
                     (
                         label,
-                        vec!["distinct", "covered", "clarification", "conflict", "inconclusive"],
+                        vec![
+                            "distinct",
+                            "covered",
+                            "clarification",
+                            "conflict",
+                            "inconclusive",
+                        ],
                     )
                 }
             }
@@ -127,7 +133,11 @@ impl DecisionModel for MockDecision {
             .map(|candidate| {
                 (
                     candidate.to_string(),
-                    if *candidate == label.as_str() { 1.0 } else { 0.0 },
+                    if *candidate == label.as_str() {
+                        1.0
+                    } else {
+                        0.0
+                    },
                 )
             })
             .collect();
@@ -309,7 +319,10 @@ fn derive_params(proposed_trait: Trait, approved: Option<bool>) -> DeriveParams 
 #[tokio::test]
 async fn approves_and_persists_without_generation_for_creation_and_clarification() {
     let proposal = full_proposal("state-updates");
-    for (relationship, stored_name) in [("distinct", "state-updates"), ("clarification", "indentation")] {
+    for (relationship, stored_name) in [
+        ("distinct", "state-updates"),
+        ("clarification", "indentation"),
+    ] {
         let h = harness(
             vec![original()],
             &[("indentation", relationship)],
@@ -507,9 +520,11 @@ async fn reconcile_reuses_selected_names_and_deletes_unused_originals() {
     );
     let requests = h.language.requests.lock().unwrap();
     assert_eq!(requests.len(), 1);
-    assert!(requests[0]
-        .system
-        .contains("Return only a JSON object with this shape: {\"traits\":[{\"name\":"));
+    assert!(
+        requests[0]
+            .system
+            .contains("Return only a JSON object with this shape: {\"traits\":[{\"name\":")
+    );
 }
 
 #[tokio::test]
@@ -671,7 +686,10 @@ async fn multiple_clarifications_are_reported_without_writes() {
             proposed_trait,
         } => {
             assert_eq!(traits, vec![original(), other()]);
-            assert!(proposed_trait.contains("name: indentation"), "{proposed_trait}");
+            assert!(
+                proposed_trait.contains("name: indentation"),
+                "{proposed_trait}"
+            );
         }
         other => panic!("expected Clarification, got {other:?}"),
     }
@@ -782,7 +800,10 @@ async fn tagged_serialization_matches_the_wire_contract() {
         proposed: "p".to_string(),
         reason: FailReason::CoverageGap,
     };
-    assert_eq!(serde_json::to_value(&fail).unwrap()["reason"], "coverage_gap");
+    assert_eq!(
+        serde_json::to_value(&fail).unwrap()["reason"],
+        "coverage_gap"
+    );
 
     let created = TraitDerivation::Created {
         r#trait: original(),

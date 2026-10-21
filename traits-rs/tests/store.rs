@@ -22,7 +22,9 @@ fn trait_with(name_value: &str) -> Trait {
 }
 
 async fn open(dir: &TempDir) -> FileSystemStore {
-    FileSystemStore::open(dir.path().to_path_buf()).await.expect("opens store")
+    FileSystemStore::open(dir.path().to_path_buf())
+        .await
+        .expect("opens store")
 }
 
 fn file(dir: &TempDir, name_value: &str) -> std::path::PathBuf {
@@ -65,7 +67,11 @@ async fn lifecycle_add_get_update_rm() {
     assert_eq!(added, initial);
     assert_eq!(store.get(&initial.name).await.expect("gets"), initial);
 
-    let updated = Trait { requirement: "Replacement".to_string(), context: Some("Updated context.\n".to_string()), ..initial.clone() };
+    let updated = Trait {
+        requirement: "Replacement".to_string(),
+        context: Some("Updated context.\n".to_string()),
+        ..initial.clone()
+    };
     store.update(updated.clone()).await.expect("updates");
     assert_eq!(store.get(&initial.name).await.expect("gets"), updated);
     assert_eq!(store.ls().await.expect("lists"), vec![updated.clone()]);
@@ -76,26 +82,57 @@ async fn lifecycle_add_get_update_rm() {
 
     let entries: Vec<String> = std::fs::read_dir(dir.path())
         .expect("read dir")
-        .map(|entry| entry.expect("entry").file_name().to_string_lossy().into_owned())
+        .map(|entry| {
+            entry
+                .expect("entry")
+                .file_name()
+                .to_string_lossy()
+                .into_owned()
+        })
         .collect();
     assert_eq!(entries, vec!["test-trait.md".to_string()]);
 
-    let collision = store.add(initial.clone()).await.expect_err("duplicate add fails");
-    assert!(matches!(&collision, ToolFailure::TraitAlreadyExistsError { name, .. } if name == "test-trait"));
+    let collision = store
+        .add(initial.clone())
+        .await
+        .expect_err("duplicate add fails");
+    assert!(
+        matches!(&collision, ToolFailure::TraitAlreadyExistsError { name, .. } if name == "test-trait")
+    );
     assert_eq!(store.get(&initial.name).await.expect("gets"), updated);
 
-    let renamed = Trait { name: name("renamed-trait"), ..updated.clone() };
-    let missing_update = store.update(renamed.clone()).await.expect_err("update of missing trait fails");
-    assert!(matches!(missing_update, ToolFailure::TraitNotFoundError { .. }));
+    let renamed = Trait {
+        name: name("renamed-trait"),
+        ..updated.clone()
+    };
+    let missing_update = store
+        .update(renamed.clone())
+        .await
+        .expect_err("update of missing trait fails");
+    assert!(matches!(
+        missing_update,
+        ToolFailure::TraitNotFoundError { .. }
+    ));
 
     store.add(renamed.clone()).await.expect("adds renamed");
-    store.rm(std::slice::from_ref(&initial.name)).await.expect("removes initial");
+    store
+        .rm(std::slice::from_ref(&initial.name))
+        .await
+        .expect("removes initial");
     assert_eq!(store.ls().await.expect("lists"), vec![renamed.clone()]);
 
-    let missing = store.get(&initial.name).await.expect_err("get of removed trait fails");
-    assert!(matches!(&missing, ToolFailure::TraitNotFoundError { name, .. } if name == "test-trait"));
+    let missing = store
+        .get(&initial.name)
+        .await
+        .expect_err("get of removed trait fails");
+    assert!(
+        matches!(&missing, ToolFailure::TraitNotFoundError { name, .. } if name == "test-trait")
+    );
 
-    store.rm(std::slice::from_ref(&renamed.name)).await.expect("removes renamed");
+    store
+        .rm(std::slice::from_ref(&renamed.name))
+        .await
+        .expect("removes renamed");
     assert_eq!(store.ls().await.expect("lists"), Vec::<Trait>::new());
 }
 
@@ -104,7 +141,9 @@ async fn get_missing_trait_reports_not_found() {
     let dir = TempDir::new().expect("tempdir");
     let store = open(&dir).await;
     let failure = store.get(&name("missing-trait")).await.expect_err("fails");
-    assert!(matches!(&failure, ToolFailure::TraitNotFoundError { name, .. } if name == "missing-trait"));
+    assert!(
+        matches!(&failure, ToolFailure::TraitNotFoundError { name, .. } if name == "missing-trait")
+    );
     assert_eq!(failure.message(), "Trait missing-trait was not found");
 }
 
@@ -129,10 +168,19 @@ async fn filename_mismatch_is_rejected_without_mutation() {
     let get_failure = store.get(&wrong).await.expect_err("get fails");
     assert_mismatch(&get_failure, &path, "actual-name.md");
 
-    let update_failure = store.update(Trait { name: wrong.clone(), ..actual.clone() }).await.expect_err("update fails");
+    let update_failure = store
+        .update(Trait {
+            name: wrong.clone(),
+            ..actual.clone()
+        })
+        .await
+        .expect_err("update fails");
     assert_mismatch(&update_failure, &path, "actual-name.md");
 
-    let rm_failure = store.rm(std::slice::from_ref(&wrong)).await.expect_err("rm fails");
+    let rm_failure = store
+        .rm(std::slice::from_ref(&wrong))
+        .await
+        .expect_err("rm fails");
     assert_mismatch(&rm_failure, &path, "actual-name.md");
 
     let ls_failure = store.ls().await.expect_err("ls fails");
@@ -148,7 +196,11 @@ async fn filename_mismatch_is_rejected_without_mutation() {
 
 fn assert_mismatch(failure: &ToolFailure, path: &Path, expected: &str) {
     match failure {
-        ToolFailure::TraitFilenameMismatchError { path: got, expected_filename, .. } => {
+        ToolFailure::TraitFilenameMismatchError {
+            path: got,
+            expected_filename,
+            ..
+        } => {
             assert_eq!(got.as_str(), path.to_string_lossy().as_ref());
             assert_eq!(expected_filename.as_str(), expected);
         }
@@ -191,8 +243,14 @@ async fn parse_errors_report_recovery_and_do_not_mutate() {
     let path = file(&dir, "old-format");
 
     let fixtures = [
-        ("---\nname: old-format\n---\nPreserve this rule.", "does not match the installed Trait schema"),
-        ("---\nname: [\n---\nPreserve this rule.", "do not assume this is a schema migration"),
+        (
+            "---\nname: old-format\n---\nPreserve this rule.",
+            "does not match the installed Trait schema",
+        ),
+        (
+            "---\nname: [\n---\nPreserve this rule.",
+            "do not assume this is a schema migration",
+        ),
     ];
 
     for (text, diagnostic) in fixtures {
@@ -207,9 +265,17 @@ async fn parse_errors_report_recovery_and_do_not_mutate() {
         for result in operations {
             let failure = result.expect_err("operation fails");
             assert!(matches!(failure, ToolFailure::TraitParseError { .. }));
-            assert!(failure.message().contains(diagnostic), "{}", failure.message());
+            assert!(
+                failure.message().contains(diagnostic),
+                "{}",
+                failure.message()
+            );
             for substring in RECOVERY_SUBSTRINGS {
-                assert!(failure.message().contains(substring), "missing {substring:?} in {}", failure.message());
+                assert!(
+                    failure.message().contains(substring),
+                    "missing {substring:?} in {}",
+                    failure.message()
+                );
             }
         }
 
@@ -224,7 +290,10 @@ async fn rm_stops_at_the_first_error_but_keeps_earlier_removals() {
     store.add(trait_with("first")).await.expect("adds first");
     store.add(trait_with("second")).await.expect("adds second");
 
-    let failure = store.rm(&[name("first"), name("absent"), name("second")]).await.expect_err("rm fails");
+    let failure = store
+        .rm(&[name("first"), name("absent"), name("second")])
+        .await
+        .expect_err("rm fails");
     assert!(matches!(failure, ToolFailure::TraitNotFoundError { .. }));
     assert!(!file(&dir, "first").exists(), "earlier removal persists");
     assert!(file(&dir, "second").exists(), "later removals do not run");

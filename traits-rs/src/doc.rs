@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 use saphyr::{LoadableYamlNode, Yaml};
+use serde::{Deserialize, Serialize};
 
 /// Unique trait identity: descriptive kebab-case, no redundant `trait-` prefix,
 /// at most 80 ASCII characters. Also used as the Markdown filename stem.
@@ -16,10 +16,17 @@ impl TraitName {
         let valid = !value.is_empty()
             && value.len() <= 80
             && !value.starts_with("trait-")
-            && value
-                .split('-')
-                .all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit()));
-        if valid { Ok(Self(value.to_string())) } else { Err(TraitNameError(value.to_string())) }
+            && value.split('-').all(|part| {
+                !part.is_empty()
+                    && part
+                        .bytes()
+                        .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
+            });
+        if valid {
+            Ok(Self(value.to_string()))
+        } else {
+            Err(TraitNameError(value.to_string()))
+        }
     }
 
     pub fn as_str(&self) -> &str {
@@ -117,16 +124,27 @@ fn split_frontmatter(text: &str) -> Result<(&str, &str), SplitError> {
 pub fn parse(text: &str, path: &str) -> Result<Trait, crate::error::ToolFailure> {
     let (yaml_text, body) = split_frontmatter(text).map_err(|error| {
         let detail = match error {
-            SplitError::Missing => "MissingFrontmatterError: Document must start with YAML frontmatter",
-            SplitError::Unterminated => "UnterminatedFrontmatterError: Frontmatter is missing its closing delimiter",
+            SplitError::Missing => {
+                "MissingFrontmatterError: Document must start with YAML frontmatter"
+            }
+            SplitError::Unterminated => {
+                "UnterminatedFrontmatterError: Frontmatter is missing its closing delimiter"
+            }
         };
         parse_failure(path, detail, MALFORMED_DIAGNOSIS)
     })?;
 
     let frontmatter = decode_frontmatter(yaml_text, path)?;
 
-    let context = if body.is_empty() { None } else { Some(body.to_string()) };
-    Ok(Trait { context, ..frontmatter })
+    let context = if body.is_empty() {
+        None
+    } else {
+        Some(body.to_string())
+    };
+    Ok(Trait {
+        context,
+        ..frontmatter
+    })
 }
 
 /// Parse the raw frontmatter text as YAML and decode it into a `Trait`.
@@ -149,7 +167,12 @@ fn decode_frontmatter(yaml_text: &str, path: &str) -> Result<Trait, crate::error
     let root = documents.first();
     let mapping = match root {
         Some(Yaml::Mapping(mapping)) => mapping,
-        _ => return Err(schema_failure(path, "SchemaError: frontmatter must be a YAML mapping")),
+        _ => {
+            return Err(schema_failure(
+                path,
+                "SchemaError: frontmatter must be a YAML mapping",
+            ));
+        }
     };
 
     let mut name: Option<String> = None;
@@ -171,7 +194,10 @@ fn decode_frontmatter(yaml_text: &str, path: &str) -> Result<Trait, crate::error
             "purpose" => purpose = Some(string_field(path, key, value)?),
             "guidance" => guidance = Some(string_field(path, key, value)?),
             other => {
-                return Err(schema_failure(path, &format!("SchemaError: unknown frontmatter field {other}")));
+                return Err(schema_failure(
+                    path,
+                    &format!("SchemaError: unknown frontmatter field {other}"),
+                ));
             }
         }
     }
@@ -184,7 +210,15 @@ fn decode_frontmatter(yaml_text: &str, path: &str) -> Result<Trait, crate::error
     let name = TraitName::parse(&name)
         .map_err(|error| schema_failure(path, &format!("SchemaError: {error}")))?;
 
-    Ok(Trait { name, subject, requirement, applicability, purpose, guidance, context: None })
+    Ok(Trait {
+        name,
+        subject,
+        requirement,
+        applicability,
+        purpose,
+        guidance,
+        context: None,
+    })
 }
 
 fn schema_failure(path: &str, detail: &str) -> crate::error::ToolFailure {
@@ -192,12 +226,19 @@ fn schema_failure(path: &str, detail: &str) -> crate::error::ToolFailure {
 }
 
 /// Decode a required scalar field as a present, non-blank string.
-fn string_field(path: &str, key: &str, value: &Yaml<'_>) -> Result<String, crate::error::ToolFailure> {
-    let text = value
-        .as_str()
-        .ok_or_else(|| schema_failure(path, &format!("SchemaError: field {key} must be a string")))?;
+fn string_field(
+    path: &str,
+    key: &str,
+    value: &Yaml<'_>,
+) -> Result<String, crate::error::ToolFailure> {
+    let text = value.as_str().ok_or_else(|| {
+        schema_failure(path, &format!("SchemaError: field {key} must be a string"))
+    })?;
     if !text.chars().any(|c| !c.is_whitespace()) {
-        return Err(schema_failure(path, &format!("SchemaError: field {key} must not be blank")));
+        return Err(schema_failure(
+            path,
+            &format!("SchemaError: field {key} must not be blank"),
+        ));
     }
     Ok(text.to_string())
 }
@@ -251,7 +292,11 @@ fn emit_field(out: &mut String, key: &str, value: &str) {
 fn emit_block_scalar(out: &mut String, key: &str, value: &str) {
     let trailing = value.len() - value.trim_end_matches('\n').len();
     let core = &value[..value.len() - trailing];
-    let lines: Vec<&str> = if core.is_empty() { vec![""] } else { core.split('\n').collect() };
+    let lines: Vec<&str> = if core.is_empty() {
+        vec![""]
+    } else {
+        core.split('\n').collect()
+    };
 
     let needs_indent_indicator = lines
         .iter()
@@ -298,11 +343,16 @@ fn plain_scalar_is_safe(value: &str) -> bool {
     if value.contains(": ") || value.contains(" #") || value.ends_with(':') {
         return false;
     }
-    if value.chars().any(|c| c.is_control() || c == '\t' || c == '\r') {
+    if value
+        .chars()
+        .any(|c| c.is_control() || c == '\t' || c == '\r')
+    {
         return false;
     }
-    const LEADING: [char; 19] =
-        ['-', '?', '*', '&', '!', '%', '@', '`', '|', '>', '#', '"', '\'', '[', ']', '{', '}', ',', ':'];
+    const LEADING: [char; 19] = [
+        '-', '?', '*', '&', '!', '%', '@', '`', '|', '>', '#', '"', '\'', '[', ']', '{', '}', ',',
+        ':',
+    ];
     if value.starts_with(&LEADING[..]) {
         return false;
     }
@@ -320,7 +370,11 @@ fn looks_like_timestamp(value: &str) -> bool {
         return false;
     }
     let digits = |slice: &[u8]| slice.iter().all(u8::is_ascii_digit);
-    let date = digits(&bytes[0..4]) && bytes[4] == b'-' && digits(&bytes[5..7]) && bytes[7] == b'-' && digits(&bytes[8..10]);
+    let date = digits(&bytes[0..4])
+        && bytes[4] == b'-'
+        && digits(&bytes[5..7])
+        && bytes[7] == b'-'
+        && digits(&bytes[8..10]);
     if !date {
         return false;
     }

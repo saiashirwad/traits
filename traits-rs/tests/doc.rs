@@ -35,9 +35,15 @@ const RECOVERY_SUBSTRINGS: [&str; 10] = [
 ];
 
 fn assert_recovery_block(message: &str) {
-    assert!(message.starts_with("Unable to parse trait /traits/test.md."), "{message}");
+    assert!(
+        message.starts_with("Unable to parse trait /traits/test.md."),
+        "{message}"
+    );
     for substring in RECOVERY_SUBSTRINGS {
-        assert!(message.contains(substring), "missing {substring:?} in {message}");
+        assert!(
+            message.contains(substring),
+            "missing {substring:?} in {message}"
+        );
     }
 }
 
@@ -45,7 +51,13 @@ fn assert_recovery_block(message: &str) {
 fn missing_opening_delimiter() {
     let failure = parse_error("Body");
     assert!(matches!(failure, ToolFailure::TraitParseError { .. }));
-    assert!(failure.message().contains("Document must start with YAML frontmatter"), "{}", failure.message());
+    assert!(
+        failure
+            .message()
+            .contains("Document must start with YAML frontmatter"),
+        "{}",
+        failure.message()
+    );
     assert_recovery_block(failure.message());
 }
 
@@ -54,7 +66,9 @@ fn unterminated_frontmatter() {
     for text in ["---", "---\nname: example", "---\r\nname: example"] {
         let failure = parse_error(text);
         assert!(
-            failure.message().contains("Frontmatter is missing its closing delimiter"),
+            failure
+                .message()
+                .contains("Frontmatter is missing its closing delimiter"),
             "{text:?} -> {}",
             failure.message()
         );
@@ -65,11 +79,21 @@ fn unterminated_frontmatter() {
 #[test]
 fn invalid_yaml_reports_line_and_column() {
     let failure = parse_error("---\nname: [\n---\nBody");
-    assert!(failure.message().contains("Invalid YAML frontmatter"), "{}", failure.message());
-    assert!(failure.message().contains("line "), "{}", failure.message());
-    assert!(failure.message().contains("column "), "{}", failure.message());
     assert!(
-        failure.message().contains("do not assume this is a schema migration"),
+        failure.message().contains("Invalid YAML frontmatter"),
+        "{}",
+        failure.message()
+    );
+    assert!(failure.message().contains("line "), "{}", failure.message());
+    assert!(
+        failure.message().contains("column "),
+        "{}",
+        failure.message()
+    );
+    assert!(
+        failure
+            .message()
+            .contains("do not assume this is a schema migration"),
         "{}",
         failure.message()
     );
@@ -80,7 +104,9 @@ fn invalid_yaml_reports_line_and_column() {
 fn schema_failure_uses_schema_diagnosis() {
     let failure = parse_error("---\nname: old-format\n---\nPreserve this rule.");
     assert!(
-        failure.message().contains("does not match the installed Trait schema"),
+        failure
+            .message()
+            .contains("does not match the installed Trait schema"),
         "{}",
         failure.message()
     );
@@ -120,9 +146,15 @@ fn roundtrip_minimal_trait() {
     assert!(!text.contains("context:"), "{text}");
     assert!(!text.contains("applicability:"), "{text}");
     assert!(!text.contains("guidance:"), "{text}");
-    assert_eq!(parse(&text, "/traits/test.md").expect("parses"), trait_value);
+    assert_eq!(
+        parse(&text, "/traits/test.md").expect("parses"),
+        trait_value
+    );
     let trimmed = text.trim_end_matches('\n');
-    assert_eq!(parse(trimmed, "/traits/test.md").expect("parses"), trait_value);
+    assert_eq!(
+        parse(trimmed, "/traits/test.md").expect("parses"),
+        trait_value
+    );
 }
 
 #[test]
@@ -134,7 +166,10 @@ fn roundtrip_all_fields() {
         ..minimal()
     };
     let text = serialize(&trait_value);
-    assert_eq!(parse(&text, "/traits/test.md").expect("parses"), trait_value);
+    assert_eq!(
+        parse(&text, "/traits/test.md").expect("parses"),
+        trait_value
+    );
 }
 
 #[test]
@@ -144,7 +179,10 @@ fn roundtrip_multiline_context_with_delimiter() {
         ..minimal()
     };
     let text = serialize(&trait_value);
-    assert_eq!(parse(&text, "/traits/test.md").expect("parses"), trait_value);
+    assert_eq!(
+        parse(&text, "/traits/test.md").expect("parses"),
+        trait_value
+    );
 }
 
 #[test]
@@ -168,9 +206,18 @@ fn parses_folded_and_literal_yaml() {
         "Not frontmatter.\n",
     );
     let trait_value = parse(text, "/traits/test.md").expect("parses");
-    assert_eq!(trait_value.requirement, "Stay within delegated authority.\n");
-    assert_eq!(trait_value.applicability.as_deref(), Some("Before payment.\nExcept test transactions."));
-    assert_eq!(trait_value.context.as_deref(), Some("\n# Context\n\n---\nNot frontmatter.\n"));
+    assert_eq!(
+        trait_value.requirement,
+        "Stay within delegated authority.\n"
+    );
+    assert_eq!(
+        trait_value.applicability.as_deref(),
+        Some("Before payment.\nExcept test transactions.")
+    );
+    assert_eq!(
+        trait_value.context.as_deref(),
+        Some("\n# Context\n\n---\nNot frontmatter.\n")
+    );
 }
 
 #[test]
@@ -178,21 +225,33 @@ fn roundtrip_chomping_suffixes() {
     for suffix in ["", "\n", "\n\n"] {
         let trait_value = Trait {
             subject: format!(" A payment proposal\nwith indented context.{suffix}"),
-            requirement: format!("Require delegated authority.\n---\nDo not exceed the budget.{suffix}"),
-            applicability: Some(format!("Before committing funds.\nExcept explicitly authorized test transactions.{suffix}")),
+            requirement: format!(
+                "Require delegated authority.\n---\nDo not exceed the budget.{suffix}"
+            ),
+            applicability: Some(format!(
+                "Before committing funds.\nExcept explicitly authorized test transactions.{suffix}"
+            )),
             purpose: format!("Protect funds.\nEnable autonomous purchases.{suffix}"),
-            guidance: Some(format!("Negotiate, decline, or escalate.\nDo not assume permission.{suffix}")),
+            guidance: Some(format!(
+                "Negotiate, decline, or escalate.\nDo not assume permission.{suffix}"
+            )),
             context: Some(format!("Supporting context.\n\n---\n\nExample.{suffix}")),
             ..minimal()
         };
         let text = serialize(&trait_value);
         assert!(text.contains("requirement: |"), "{text}");
-        assert_eq!(parse(&text, "/traits/test.md").expect("parses"), trait_value);
+        assert_eq!(
+            parse(&text, "/traits/test.md").expect("parses"),
+            trait_value
+        );
 
         let crlf = text.replace('\n', "\r\n");
         let parsed = parse(&crlf, "/traits/test.md").expect("parses crlf");
         let expected = Trait {
-            context: trait_value.context.as_ref().map(|value| value.replace('\n', "\r\n")),
+            context: trait_value
+                .context
+                .as_ref()
+                .map(|value| value.replace('\n', "\r\n")),
             ..trait_value.clone()
         };
         assert_eq!(parsed, expected);
@@ -231,16 +290,26 @@ fn roundtrip_single_line_quoting_cases() {
         "2024-01-01T00:00:00Z",
     ];
     for value in cases {
-        let trait_value = Trait { subject: value.to_string(), ..minimal() };
+        let trait_value = Trait {
+            subject: value.to_string(),
+            ..minimal()
+        };
         let text = serialize(&trait_value);
-        assert_eq!(parse(&text, "/traits/test.md").expect("parses"), trait_value, "value {value:?} in {text}");
+        assert_eq!(
+            parse(&text, "/traits/test.md").expect("parses"),
+            trait_value,
+            "value {value:?} in {text}"
+        );
     }
 }
 
 #[test]
 fn blank_values_are_quoted_when_serialized() {
     for value in ["", "   "] {
-        let trait_value = Trait { subject: value.to_string(), ..minimal() };
+        let trait_value = Trait {
+            subject: value.to_string(),
+            ..minimal()
+        };
         let text = serialize(&trait_value);
         assert!(text.contains(&format!("subject: \"{value}\"")), "{text}");
     }
@@ -261,14 +330,26 @@ fn rejects_unknown_frontmatter_keys() {
     ] {
         let text = format!("---\n{header}{field}\n---\nContext");
         let failure = parse_error(&text);
-        assert!(failure.message().contains("does not match the installed Trait schema"), "{field}: {}", failure.message());
+        assert!(
+            failure
+                .message()
+                .contains("does not match the installed Trait schema"),
+            "{field}: {}",
+            failure.message()
+        );
     }
 }
 
 #[test]
 fn rejects_body_only_old_format() {
     let failure = parse_error("---\nname: delegated-spending\n---\nAn old body-only requirement.");
-    assert!(failure.message().contains("does not match the installed Trait schema"), "{}", failure.message());
+    assert!(
+        failure
+            .message()
+            .contains("does not match the installed Trait schema"),
+        "{}",
+        failure.message()
+    );
 }
 
 #[test]
@@ -280,7 +361,13 @@ fn rejects_missing_required_fields() {
         "subject: A payment.\nrequirement: Stay within authority.\npurpose: Protect funds.",
     ] {
         let failure = parse_error(&format!("---\n{header}\n---"));
-        assert!(failure.message().contains("does not match the installed Trait schema"), "{header}: {}", failure.message());
+        assert!(
+            failure
+                .message()
+                .contains("does not match the installed Trait schema"),
+            "{header}: {}",
+            failure.message()
+        );
     }
 }
 
@@ -303,18 +390,33 @@ fn rejects_blank_and_wrong_typed_fields() {
         out
     };
 
-    for field in ["name", "subject", "requirement", "applicability", "purpose", "guidance"] {
+    for field in [
+        "name",
+        "subject",
+        "requirement",
+        "applicability",
+        "purpose",
+        "guidance",
+    ] {
         for value in ["\"\"", "\"   \"", "false", "true", "2", "{}", "[]", "~"] {
             let failure = parse_error(&build(field, &format!(" {value}")));
             assert!(
-                failure.message().contains("does not match the installed Trait schema"),
+                failure
+                    .message()
+                    .contains("does not match the installed Trait schema"),
                 "{field}: {value} -> {}",
                 failure.message()
             );
         }
         // Explicit null (no value) is rejected too.
         let failure = parse_error(&build(field, ""));
-        assert!(failure.message().contains("does not match the installed Trait schema"), "{field}: {}", failure.message());
+        assert!(
+            failure
+                .message()
+                .contains("does not match the installed Trait schema"),
+            "{field}: {}",
+            failure.message()
+        );
     }
 }
 
@@ -327,19 +429,38 @@ fn rejects_malformed_documents() {
         "Context without frontmatter",
         "Context before frontmatter\n---\nname: test\n---",
     ] {
-        assert!(parse(text, "/traits/test.md").is_err(), "{text:?} should fail");
+        assert!(
+            parse(text, "/traits/test.md").is_err(),
+            "{text:?} should fail"
+        );
     }
 }
 
 #[test]
 fn rejects_unsafe_names() {
     let long = "a".repeat(81);
-    for invalid in ["", "../escape", "with/slash", "name.md", "Uppercase", "two words", "snake_case", "trait-example", long.as_str()] {
+    for invalid in [
+        "",
+        "../escape",
+        "with/slash",
+        "name.md",
+        "Uppercase",
+        "two words",
+        "snake_case",
+        "trait-example",
+        long.as_str(),
+    ] {
         let text = format!(
             "---\nname: {invalid}\nsubject: A payment.\nrequirement: Stay within authority.\npurpose: Protect funds.\n---\n"
         );
         let failure = parse_error(&text);
-        assert!(failure.message().contains("does not match the installed Trait schema"), "{invalid:?}: {}", failure.message());
+        assert!(
+            failure
+                .message()
+                .contains("does not match the installed Trait schema"),
+            "{invalid:?}: {}",
+            failure.message()
+        );
     }
 }
 

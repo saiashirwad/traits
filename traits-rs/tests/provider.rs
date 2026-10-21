@@ -81,7 +81,7 @@ fn provider_config(
         kind,
         model: "test-model".to_string(),
         api_key_env: api_key_env.to_string(),
-        base_url,
+        base_url: base_url.unwrap_or_default(),
         json_mode: JsonMode::Object,
         reasoning_effort: None,
         timeout_ms: 1000,

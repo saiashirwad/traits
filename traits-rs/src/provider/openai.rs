@@ -149,7 +149,14 @@ impl OpenAiCompatProvider {
             { "role": "system", "content": CLASSIFY_SYSTEM },
             { "role": "user", "content": user.to_string() },
         ]);
-        Value::Object(self.base_body(messages))
+        let mut body = self.base_body(messages);
+        if !matches!(self.json_mode, JsonMode::Prompt) {
+            body.insert(
+                "response_format".to_string(),
+                json!({ "type": "json_object" }),
+            );
+        }
+        Value::Object(body)
     }
 
     fn generate_body(&self, request: &GenerateRequest, mode: JsonMode) -> Value {

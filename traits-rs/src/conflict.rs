@@ -128,9 +128,9 @@ pub(crate) fn answer_label(
     key: &str,
     allowed: &[&str],
 ) -> Result<String, ToolFailure> {
-    let answer = answers
-        .get(key)
-        .ok_or_else(|| ToolFailure::ai(format!("Decision model returned no answer for \"{key}\"")))?;
+    let answer = answers.get(key).ok_or_else(|| {
+        ToolFailure::ai(format!("Decision model returned no answer for \"{key}\""))
+    })?;
     let label = answer.label.as_str();
     if !allowed.contains(&label) {
         return Err(ToolFailure::ai(format!(

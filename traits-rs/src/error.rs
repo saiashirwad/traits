@@ -51,11 +51,15 @@ pub enum ToolFailure {
 
 impl ToolFailure {
     pub fn ai(message: impl Into<String>) -> Self {
-        Self::AiError { message: message.into() }
+        Self::AiError {
+            message: message.into(),
+        }
     }
 
     pub fn platform(message: impl Into<String>) -> Self {
-        Self::PlatformError { message: message.into() }
+        Self::PlatformError {
+            message: message.into(),
+        }
     }
 
     pub fn not_found(name: &str) -> Self {
@@ -81,10 +85,18 @@ impl ToolFailure {
     }
 
     pub fn parse(path: &str, message: String) -> Self {
-        Self::TraitParseError { path: path.to_string(), message }
+        Self::TraitParseError {
+            path: path.to_string(),
+            message,
+        }
     }
 
-    pub fn too_large(trait_name: &str, bytes: usize, max_bytes: usize, location: Option<SourceLocation>) -> Self {
+    pub fn too_large(
+        trait_name: &str,
+        bytes: usize,
+        max_bytes: usize,
+        location: Option<SourceLocation>,
+    ) -> Self {
         Self::TraitAssessmentTooLargeError {
             trait_name: trait_name.to_string(),
             bytes,

@@ -23,13 +23,18 @@ use crate::config::Config;
 use crate::doc::Trait;
 use crate::error::ToolFailure;
 
-static IGNORE_DIRECTIVE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^//\s*traits-ignore-file\s+(\S+)\s*:\s*(\S.*)$").expect("valid directive regex"));
+static IGNORE_DIRECTIVE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^//\s*traits-ignore-file\s+(\S+)\s*:\s*(\S.*)$").expect("valid directive regex")
+});
 
 /// Resolve a path against `root`, normalizing `.` and `..` lexically. Matches
 /// the lexical behavior of `path.resolve` (no symlink resolution).
 pub(crate) fn absolute(root: &Path, path: &Path) -> PathBuf {
-    let joined = if path.is_absolute() { path.to_path_buf() } else { root.join(path) };
+    let joined = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        root.join(path)
+    };
     normalize(&joined)
 }
 
@@ -57,7 +62,14 @@ pub async fn git_included_files(config: &Config) -> Result<Option<HashSet<PathBu
     }
     let root = &config.config_root;
     let output = tokio::process::Command::new("git")
-        .args(["ls-files", "--cached", "--others", "--exclude-standard", "--full-name", "-z"])
+        .args([
+            "ls-files",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+            "--full-name",
+            "-z",
+        ])
         .current_dir(root)
         .output()
         .await
@@ -103,7 +115,9 @@ pub fn resolve_includes(config: &Config, includes: &[String]) -> Result<Vec<Path
         let glob = GlobBuilder::new(&pattern_text)
             .literal_separator(true)
             .build()
-            .map_err(|error| ToolFailure::platform(format!("invalid include pattern {pattern:?}: {error}")))?
+            .map_err(|error| {
+                ToolFailure::platform(format!("invalid include pattern {pattern:?}: {error}"))
+            })?
             .compile_matcher();
         let allowed_hidden = names_dot_component(pattern);
         let base = glob_base(&absolute_pattern);
@@ -137,7 +151,9 @@ pub fn resolve_includes(config: &Config, includes: &[String]) -> Result<Vec<Path
             if !glob.is_match(path) {
                 continue;
             }
-            let Ok(metadata) = std::fs::metadata(path) else { continue };
+            let Ok(metadata) = std::fs::metadata(path) else {
+                continue;
+            };
             if !metadata.is_file() {
                 continue;
             }
@@ -170,17 +186,20 @@ fn glob_base(pattern: &Path) -> PathBuf {
 }
 
 fn has_glob_meta(text: &str) -> bool {
-    text.chars().any(|character| matches!(character, '*' | '?' | '[' | ']' | '{' | '}'))
+    text.chars()
+        .any(|character| matches!(character, '*' | '?' | '[' | ']' | '{' | '}'))
 }
 
 fn names_dot_component(pattern: &str) -> bool {
-    Path::new(pattern).components().any(|component| match component {
-        Component::Normal(name) => {
-            let name = name.to_string_lossy();
-            name.starts_with('.') && name != "." && name != ".."
-        }
-        _ => false,
-    })
+    Path::new(pattern)
+        .components()
+        .any(|component| match component {
+            Component::Normal(name) => {
+                let name = name.to_string_lossy();
+                name.starts_with('.') && name != "." && name != ".."
+            }
+            _ => false,
+        })
 }
 
 fn has_hidden_component(path: &Path, base: &Path) -> bool {
@@ -220,7 +239,10 @@ impl ExcludeSet {
                 name_globs.push(build_glob(Path::new(pattern), pattern)?);
             }
         }
-        Ok(Self { path_globs, name_globs })
+        Ok(Self {
+            path_globs,
+            name_globs,
+        })
     }
 
     fn matches(&self, path: &Path) -> bool {
@@ -228,7 +250,10 @@ impl ExcludeSet {
             return true;
         }
         match path.file_name() {
-            Some(name) => self.name_globs.iter().any(|glob| glob.is_match(Path::new(name))),
+            Some(name) => self
+                .name_globs
+                .iter()
+                .any(|glob| glob.is_match(Path::new(name))),
             None => false,
         }
     }
@@ -239,7 +264,9 @@ fn build_glob(pattern: &Path, source: &str) -> Result<GlobMatcher, ToolFailure> 
         .literal_separator(true)
         .build()
         .map(|glob| glob.compile_matcher())
-        .map_err(|error| ToolFailure::platform(format!("invalid exclude pattern {source:?}: {error}")))
+        .map_err(|error| {
+            ToolFailure::platform(format!("invalid exclude pattern {source:?}: {error}"))
+        })
 }
 
 /// Parse leading `// traits-ignore-file <reference>: <reason>` directives from a
@@ -308,7 +335,10 @@ mod tests {
         let references = trait_ignores(
             "#!/usr/bin/env node\n\n// header\n// traits-ignore-file first: reason\n// traits-ignore-file second: another reason\nimport 'module'",
         );
-        assert_eq!(references, HashSet::from(["first".to_string(), "second".to_string()]));
+        assert_eq!(
+            references,
+            HashSet::from(["first".to_string(), "second".to_string()])
+        );
     }
 
     #[test]
@@ -321,14 +351,17 @@ mod tests {
 
     #[test]
     fn ignores_strings_and_comments_after_code() {
-        let references =
-            trait_ignores("const text = `\n// traits-ignore-file first: reason\n`\n// traits-ignore-file second: reason");
+        let references = trait_ignores(
+            "const text = `\n// traits-ignore-file first: reason\n`\n// traits-ignore-file second: reason",
+        );
         assert!(references.is_empty());
     }
 
     #[test]
     fn handles_crlf_and_deduplicates() {
-        let references = trait_ignores("// traits-ignore-file first: reason\r\n// traits-ignore-file first: repeated\r\n");
+        let references = trait_ignores(
+            "// traits-ignore-file first: reason\r\n// traits-ignore-file first: repeated\r\n",
+        );
         assert_eq!(references, HashSet::from(["first".to_string()]));
     }
 
@@ -336,7 +369,10 @@ mod tests {
     fn selects_exact_unique_names_and_multiple_exceptions() {
         let first = trait_named("direct-callbacks");
         let second = trait_named("use-arrow-functions");
-        let selected = exclude_ignored(&[first.clone(), second.clone()], "// traits-ignore-file direct-callbacks: exception");
+        let selected = exclude_ignored(
+            &[first.clone(), second.clone()],
+            "// traits-ignore-file direct-callbacks: exception",
+        );
         assert_eq!(selected, vec![second.clone()]);
         let header = "// traits-ignore-file direct-callbacks: first exception\n// traits-ignore-file use-arrow-functions: second exception\nconst value = 1";
         assert!(exclude_ignored(&[first, second], header).is_empty());
@@ -347,19 +383,28 @@ mod tests {
         let first = trait_named("direct-callbacks");
         let second = trait_named("use-arrow-functions");
         let header = "// traits-ignore-file direct: partial\n// traits-ignore-file Direct-callbacks: wrong casing\n// traits-ignore-file direct-callbacks.md: filename\n// traits-ignore-file unknown-trait: unknown";
-        assert_eq!(exclude_ignored(&[first.clone(), second.clone()], header), vec![first, second]);
+        assert_eq!(
+            exclude_ignored(&[first.clone(), second.clone()], header),
+            vec![first, second]
+        );
     }
 
     #[test]
     fn requires_references_to_be_updated_after_renaming() {
         let renamed = trait_named("renamed-callbacks");
         assert_eq!(
-            exclude_ignored(std::slice::from_ref(&renamed), "// traits-ignore-file direct-callbacks: old name"),
+            exclude_ignored(
+                std::slice::from_ref(&renamed),
+                "// traits-ignore-file direct-callbacks: old name"
+            ),
             vec![renamed.clone()]
         );
         assert!(
-            exclude_ignored(std::slice::from_ref(&renamed), "// traits-ignore-file renamed-callbacks: new name")
-                .is_empty()
+            exclude_ignored(
+                std::slice::from_ref(&renamed),
+                "// traits-ignore-file renamed-callbacks: new name"
+            )
+            .is_empty()
         );
     }
 
@@ -367,7 +412,10 @@ mod tests {
     fn ignores_directives_without_reasons_or_after_code() {
         let first = trait_named("direct-callbacks");
         assert_eq!(
-            exclude_ignored(std::slice::from_ref(&first), "// traits-ignore-file direct-callbacks:   "),
+            exclude_ignored(
+                std::slice::from_ref(&first),
+                "// traits-ignore-file direct-callbacks:   "
+            ),
             vec![first.clone()]
         );
         assert_eq!(
@@ -415,7 +463,11 @@ mod tests {
         let explicit = resolve_includes(&config, &["src/.hidden.ts".to_string()]).unwrap();
         assert_eq!(explicit, vec![root.join("src/.hidden.ts")]);
 
-        assert!(resolve_includes(&config, &["does/not/exist/*.ts".to_string()]).unwrap().is_empty());
+        assert!(
+            resolve_includes(&config, &["does/not/exist/*.ts".to_string()])
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
@@ -438,7 +490,10 @@ mod tests {
             ],
         )
         .unwrap();
-        assert_eq!(resolved, vec![root.join("src/other.ts"), root.join("src/keep.ts")]);
+        assert_eq!(
+            resolved,
+            vec![root.join("src/other.ts"), root.join("src/keep.ts")]
+        );
     }
 
     #[test]
@@ -467,7 +522,11 @@ mod tests {
 
     #[tokio::test]
     async fn git_included_files_lists_tracked_and_untracked() {
-        if std::process::Command::new("git").arg("--version").output().is_err() {
+        if std::process::Command::new("git")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
             return;
         }
         let dir = tempfile::tempdir().unwrap();

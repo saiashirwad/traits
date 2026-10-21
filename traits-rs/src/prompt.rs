@@ -19,12 +19,27 @@ pub fn assessment_question(trait_value: &Trait) -> ClassifyQuestion {
     );
 
     let mut criteria = IndexMap::new();
-    criteria.insert("compliant".to_string(), "The trait applies and the input abides by it.".to_string());
-    criteria.insert("violation".to_string(), "The input violates the trait.".to_string());
-    criteria.insert("not-applicable".to_string(), "The trait does not apply to the input.".to_string());
-    criteria.insert("inconclusive".to_string(), "Insufficient context or ambiguity prevents a reliable judgment.".to_string());
+    criteria.insert(
+        "compliant".to_string(),
+        "The trait applies and the input abides by it.".to_string(),
+    );
+    criteria.insert(
+        "violation".to_string(),
+        "The input violates the trait.".to_string(),
+    );
+    criteria.insert(
+        "not-applicable".to_string(),
+        "The trait does not apply to the input.".to_string(),
+    );
+    criteria.insert(
+        "inconclusive".to_string(),
+        "Insufficient context or ambiguity prevents a reliable judgment.".to_string(),
+    );
 
-    ClassifyQuestion { instructions, criteria }
+    ClassifyQuestion {
+        instructions,
+        criteria,
+    }
 }
 
 #[cfg(test)]
@@ -51,6 +66,9 @@ mod tests {
             question.criteria.keys().collect::<Vec<_>>(),
             vec!["compliant", "violation", "not-applicable", "inconclusive"]
         );
-        assert_eq!(question.criteria["not-applicable"], "The trait does not apply to the input.");
+        assert_eq!(
+            question.criteria["not-applicable"],
+            "The trait does not apply to the input."
+        );
     }
 }
