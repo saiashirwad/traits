@@ -52,6 +52,8 @@ pub struct Trait {
     pub requirement: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub applicability: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub paths: Option<Paths>,
     pub purpose: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub guidance: Option<String>,
@@ -59,10 +61,40 @@ pub struct Trait {
     pub context: Option<String>,
 }
 
+/// Glob patterns naming the only files a trait can apply to, resolved like
+/// `exclude` patterns against the worktree root. Never empty.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(transparent)]
+pub struct Paths(Vec<String>);
+
+impl Paths {
+    pub fn parse(patterns: Vec<String>) -> Result<Self, TraitError> {
+        if patterns.is_empty() {
+            return Err(TraitError::NoPaths);
+        }
+        for pattern in &patterns {
+            if pattern.trim().is_empty() {
+                return Err(TraitError::Blank("paths"));
+            }
+            crate::files::glob(pattern)
+                .map_err(|error| TraitError::Glob(pattern.clone(), error.kind().to_string()))?;
+        }
+        Ok(Self(patterns))
+    }
+
+    pub fn patterns(&self) -> &[String] {
+        &self.0
+    }
+}
+
 #[derive(Debug, thiserror::Error, PartialEq)]
 pub enum TraitError {
     #[error("field {0} must not be blank")]
     Blank(&'static str),
+    #[error("field paths must list at least one glob")]
+    NoPaths,
+    #[error("field paths has an invalid glob {0:?}: {1}")]
+    Glob(String, String),
     #[error(transparent)]
     Name(#[from] TraitNameError),
 }
@@ -76,6 +108,8 @@ struct TraitFields {
     requirement: String,
     #[serde(default)]
     applicability: Option<String>,
+    #[serde(default)]
+    paths: Option<Vec<String>>,
     purpose: String,
     #[serde(default)]
     guidance: Option<String>,
@@ -93,6 +127,7 @@ impl TryFrom<TraitFields> for Trait {
             subject: text("subject", fields.subject)?,
             requirement: text("requirement", fields.requirement)?,
             applicability: optional("applicability", fields.applicability)?,
+            paths: fields.paths.map(Paths::parse).transpose()?,
             purpose: text("purpose", fields.purpose)?,
             guidance: optional("guidance", fields.guidance)?,
             context: fields.context,
@@ -126,7 +161,7 @@ fn parse_failure(path: &str, detail: &str, diagnosis: &str) -> crate::error::Too
          Do not change files before approval. Do not merely report the blocker and stop without offering this recovery choice. If declined, leave files unchanged and report the operation as incomplete.\n\
          After approval, inspect the entire affected trait store, not just the first failing file. Classify each failure and migrate repairable legacy formats to the installed Trait schema; repair malformed documents only where the intended content is clear.\n\
          Preserve names, authoritative requirements, applicability, exceptions, examples, and all other supporting context. If a repair is ambiguous or unsupported, ask a focused question rather than guessing, inventing intent, or dropping information. Leave already-valid traits unchanged.\n\
-         The current format requires name, subject, requirement, and purpose in YAML frontmatter; applicability and guidance are optional text, and the Markdown body is optional context. Purpose explains intended benefit, not additional obligations. Legacy body requirements belong in requirement; when/mime/skip become applicability prose; diffs and additional information belong in context.\n\
+         The current format requires name, subject, requirement, and purpose in YAML frontmatter; applicability and guidance are optional text, paths is an optional list of worktree-relative globs, and the Markdown body is optional context. Purpose explains intended benefit, not additional obligations. Legacy body requirements belong in requirement; mime types become paths globs; when/skip become applicability prose; diffs and additional information belong in context.\n\
          Validate all files in the affected store with the installed Trait schema and serialize format before retrying the originally blocked operation with its original arguments. A server restart is not necessary: repaired files are read on retry.\n\
          No automatic migration has occurred. The original operation failed; do not treat it as successful or claim a completed check until the retry succeeds."
     );
@@ -231,6 +266,7 @@ fn decode_frontmatter(
     let mut subject: Option<String> = None;
     let mut requirement: Option<String> = None;
     let mut applicability: Option<String> = None;
+    let mut paths: Option<Vec<String>> = None;
     let mut purpose: Option<String> = None;
     let mut guidance: Option<String> = None;
 
@@ -243,6 +279,7 @@ fn decode_frontmatter(
             "subject" => subject = Some(string_field(path, key, value)?),
             "requirement" => requirement = Some(string_field(path, key, value)?),
             "applicability" => applicability = Some(string_field(path, key, value)?),
+            "paths" => paths = Some(strings_field(path, key, value)?),
             "purpose" => purpose = Some(string_field(path, key, value)?),
             "guidance" => guidance = Some(string_field(path, key, value)?),
             other => {
@@ -259,6 +296,7 @@ fn decode_frontmatter(
         subject: require_field(path, "subject", subject)?,
         requirement: require_field(path, "requirement", requirement)?,
         applicability,
+        paths,
         purpose: require_field(path, "purpose", purpose)?,
         guidance,
         context,
@@ -281,6 +319,26 @@ fn string_field(
         .ok_or_else(|| schema_failure(path, &format!("SchemaError: field {key} must be a string")))
 }
 
+fn strings_field(
+    path: &str,
+    key: &str,
+    value: &Yaml<'_>,
+) -> Result<Vec<String>, crate::error::ToolFailure> {
+    let invalid = || {
+        schema_failure(
+            path,
+            &format!("SchemaError: field {key} must be a list of strings"),
+        )
+    };
+    match value {
+        Yaml::Sequence(items) => items
+            .iter()
+            .map(|item| item.as_str().map(str::to_string).ok_or_else(invalid))
+            .collect(),
+        _ => Err(invalid()),
+    }
+}
+
 /// Require a field to have been present in the frontmatter mapping.
 fn require_field(
     path: &str,
@@ -298,6 +356,14 @@ pub fn serialize(trait_value: &Trait) -> String {
     emit_field(&mut frontmatter, "requirement", &trait_value.requirement);
     if let Some(applicability) = &trait_value.applicability {
         emit_field(&mut frontmatter, "applicability", applicability);
+    }
+    if let Some(paths) = &trait_value.paths {
+        frontmatter.push_str("paths:\n");
+        for pattern in paths.patterns() {
+            frontmatter.push_str("  - ");
+            frontmatter.push_str(&double_quoted(pattern));
+            frontmatter.push('\n');
+        }
     }
     emit_field(&mut frontmatter, "purpose", &trait_value.purpose);
     if let Some(guidance) = &trait_value.guidance {

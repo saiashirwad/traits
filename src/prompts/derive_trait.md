@@ -8,12 +8,12 @@
  If Revise supplies no concrete feedback, ask for revision details with the interactive question UI and free text. Do not guess or set approved: true.
  Keep the proposal pending through related work and return to it afterward unless cancelled; obtain fresh approval of the complete revised body.
  First decide whether the feedback generalizes beyond the current task and inspect existing trait files for coverage.
- Supply proposedTrait as a complete structured trait: name, subject, requirement, purpose, and optional applicability, guidance, and Markdown context.
+ Supply proposedTrait as a complete structured trait: name, subject, requirement, purpose, and optional applicability, paths, guidance, and Markdown context.
  Subject identifies what to assess; requirement is authoritative. Applicability is natural-language scope and exceptions. Purpose explains intent; guidance advises without granting authority.
  Put examples, code diffs, references, and domain details in context. Context is available during assessment, but must not hide essential obligations.
  Supply a unique descriptive kebab-case name without a redundant trait- prefix for a newly created trait; it is the canonical identity, frontmatter name, and Markdown filename stem. Duplicate names are rejected.
  Avoid repeated requirements and duplicate traits. Keep bodies standalone; do not strip essential scope or exceptions just to shorten them.
- Omit applicability when the subject needs no further restriction. Do not add arbitrary metadata or domain-specific frontmatter fields.
+ Omit applicability when the subject needs no further restriction. Put file types and locations in paths as worktree-relative globs, such as "*.tsx", and omit paths when any file may apply. Do not add arbitrary metadata or domain-specific frontmatter fields.
  On clarification, supply a complete replacement trait; omitted optional fields are removed. Approval and retries cover every field and the complete context.
  Compare against all stored traits. Only a distinct proposal is saved as a new trait.
  Inconclusive returns relationship findings and blocks all writes; clarify ambiguity or revise the proposal before retrying.

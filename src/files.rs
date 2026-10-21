@@ -220,23 +220,23 @@ fn has_always_excluded_component(path: &Path) -> bool {
     })
 }
 
-/// Configured exclusions, compiled once at config load. Patterns with a path
+/// Worktree-relative glob patterns, compiled once. Patterns with a path
 /// separator match the absolute path; bare names match a file's basename at
 /// any depth.
 #[derive(Debug, Clone, Default)]
-pub struct Excludes {
+pub struct Globs {
     patterns: Vec<String>,
     paths: GlobSet,
     names: GlobSet,
 }
 
-impl Excludes {
-    pub fn compile(root: &Path, patterns: Vec<String>) -> Result<Self, ConfigError> {
+impl Globs {
+    pub fn compile(root: &Path, patterns: Vec<String>, field: &str) -> Result<Self, ConfigError> {
         let mut paths = GlobSetBuilder::new();
         let mut names = GlobSetBuilder::new();
         for pattern in &patterns {
             let invalid = |error: globset::Error| {
-                ConfigError::new(format!("Invalid exclude pattern {pattern:?}: {error}"))
+                ConfigError::new(format!("Invalid {field} pattern {pattern:?}: {error}"))
             };
             if pattern.contains('/') || pattern.contains('\\') {
                 let absolute_pattern = absolute(root, Path::new(pattern));
@@ -247,7 +247,7 @@ impl Excludes {
         }
         let build = |set: GlobSetBuilder| {
             set.build()
-                .map_err(|error| ConfigError::new(format!("Invalid exclude patterns: {error}")))
+                .map_err(|error| ConfigError::new(format!("Invalid {field} patterns: {error}")))
         };
         Ok(Self {
             paths: build(paths)?,
@@ -260,7 +260,7 @@ impl Excludes {
         &self.patterns
     }
 
-    fn matches(&self, path: &Path) -> bool {
+    pub fn matches(&self, path: &Path) -> bool {
         self.paths.is_match(path)
             || path
                 .file_name()
@@ -268,7 +268,7 @@ impl Excludes {
     }
 }
 
-fn glob(pattern: &str) -> Result<globset::Glob, globset::Error> {
+pub(crate) fn glob(pattern: &str) -> Result<globset::Glob, globset::Error> {
     GlobBuilder::new(pattern).literal_separator(true).build()
 }
 
@@ -311,6 +311,7 @@ mod tests {
             subject: "Subject.".to_string(),
             requirement: "Requirement.".to_string(),
             applicability: None,
+            paths: None,
             purpose: "Purpose.".to_string(),
             guidance: None,
             context: None,
@@ -323,7 +324,7 @@ mod tests {
             store: root.join("traits"),
             concurrency: std::num::NonZeroUsize::new(4).unwrap(),
             exclude_gitignored: false,
-            excludes: Excludes::compile(root, excludes).unwrap(),
+            excludes: Globs::compile(root, excludes, "exclude").unwrap(),
             cache_dir: None,
             classify: Default::default(),
             generate: Default::default(),

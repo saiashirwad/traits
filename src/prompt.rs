@@ -34,8 +34,13 @@ impl Choice for Classification {
 }
 
 /// Render the instructions that assess one trait against a source excerpt.
+/// `paths` stays out: every excerpt the model sees already matched it.
 pub fn assessment_instructions(trait_value: &Trait) -> String {
-    let trait_json = serde_json::to_string(trait_value).unwrap_or_else(|_| "null".to_string());
+    let unscoped = Trait {
+        paths: None,
+        ..trait_value.clone()
+    };
+    let trait_json = serde_json::to_string(&unscoped).unwrap_or_else(|_| "null".to_string());
     // `String.stripMargin` keeps the newline separators, the single space after
     // each `|`, and the trailing indentation line; reproduce that verbatim.
     format!(
@@ -46,7 +51,7 @@ pub fn assessment_instructions(trait_value: &Trait) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::doc::TraitName;
+    use crate::doc::{Paths, TraitName};
 
     #[test]
     fn embeds_compact_trait_json() {
@@ -55,6 +60,7 @@ mod tests {
             subject: "Binding declarations.".to_string(),
             requirement: "Prefer const declarations.".to_string(),
             applicability: Some("In TypeScript.".to_string()),
+            paths: None,
             purpose: "Make immutable bindings explicit.".to_string(),
             guidance: None,
             context: Some("Body".to_string()),
@@ -62,6 +68,19 @@ mod tests {
         let json = serde_json::to_string(&trait_value).unwrap();
         assert!(assessment_instructions(&trait_value).contains(&json));
         assert!(!json.contains("guidance"), "absent optionals are omitted");
+
+        let scoped = Trait {
+            paths: Some(Paths::parse(vec!["*.ts".to_string()]).unwrap()),
+            ..trait_value
+        };
+        assert_eq!(
+            assessment_instructions(&scoped),
+            assessment_instructions(&Trait {
+                paths: None,
+                ..scoped.clone()
+            }),
+            "paths never reach the model"
+        );
     }
 
     #[test]

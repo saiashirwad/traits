@@ -5,7 +5,7 @@ use wiremock::matchers::{body_string_contains, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use traits::config::{Config, JsonMode, OperationConfig, ProviderConfig, ProviderKind};
-use traits::files::Excludes;
+use traits::files::Globs;
 use traits::provider::openai::OpenAiCompatProvider;
 use traits::provider::typesafe::TypeSafeProvider;
 use traits::provider::{Criterion, DecisionModel, GenerateRequest, LanguageModel, Question, build};
@@ -99,7 +99,7 @@ fn test_config(classify: ProviderConfig, generate: ProviderConfig) -> Config {
         store: PathBuf::from("."),
         concurrency: std::num::NonZeroUsize::MIN,
         exclude_gitignored: true,
-        excludes: Excludes::default(),
+        excludes: Globs::default(),
         cache_dir: None,
         classify: OperationConfig {
             provider: Some(classify.clone()),

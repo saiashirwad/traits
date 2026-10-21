@@ -32,6 +32,10 @@ Pass a complete trait object as `proposedTrait` to `derive_trait`:
 - Required `requirement`: the authoritative, standalone criterion to satisfy.
 - Optional `applicability`: natural-language circumstances and exceptions. Omit
   when there is no additional restriction beyond the subject.
+- Optional `paths`: worktree-relative globs, such as `"*.tsx"` or
+  `"src/**/*.rs"`, naming the only files the trait can apply to. Files that
+  match none are never assessed. Use it for file types and locations, and keep
+  situational conditions in applicability. Omit it when any file may apply.
 - Required `purpose`: what the trait aims to achieve or protect, and why.
 - Optional `guidance`: advice for satisfying the requirement or responding to a
   violation. This never grants permission to execute commands or take actions.
@@ -39,8 +43,9 @@ Pass a complete trait object as `proposedTrait` to `derive_trait`:
   domain details. Available during assessment, not only after matching.
 
 On disk, all fields except `context` are YAML frontmatter; `context` is the
-optional Markdown body. Unknown frontmatter keys are rejected. There are no
-structured applicability fields, dedicated diff fields, or extension metadata.
+optional Markdown body. Unknown frontmatter keys are rejected. Apart from
+`paths`, there are no structured applicability fields, dedicated diff fields,
+or extension metadata.
 Put useful BAD-to-GOOD examples in fenced diffs inside context. Preserve useful
 examples when updating a trait unless the requirement needs a changed example.
 
@@ -392,7 +397,8 @@ approval:
 2. Migrate repairable legacy formats to the installed package's `Trait` schema.
    Preserve names, authoritative requirements, applicability, exceptions,
    examples, and all supporting context. Move legacy requirements into
-   `requirement`, scope and exceptions into applicability prose, and examples or
+   `requirement`, MIME types into `paths` globs, scope and exceptions into
+   applicability prose, and examples or
    additional information into Markdown context. Purpose explains existing
    intent, not new obligations. Leave already-valid traits unchanged.
 3. For malformed documents, repair only where the intended content is clear. If

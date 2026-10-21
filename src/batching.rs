@@ -19,7 +19,7 @@ use crate::doc::{
     TraitName,
 };
 use crate::error::ToolFailure;
-use crate::files;
+use crate::files::{self, Globs};
 use crate::prompt::assessment_instructions;
 use crate::provider::{self, Answer, Choice, Models, Question};
 use crate::store::TraitStore;
@@ -74,12 +74,36 @@ pub async fn check_traits(
         }),
         None => Value::Null,
     };
+    let scopes = traits
+        .iter()
+        .map(|trait_value| {
+            trait_value
+                .paths
+                .as_ref()
+                .map(|paths| {
+                    Globs::compile(&config.config_root, paths.patterns().to_vec(), "paths")
+                })
+                .transpose()
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| ToolFailure::platform(error.to_string()))?;
     let mut plan = Plan::new(circumstances, &provider, config.cache_dir.as_deref())?;
     for path in &paths {
+        let in_scope = |index: usize| {
+            scopes[index]
+                .as_ref()
+                .is_none_or(|globs| globs.matches(path))
+        };
+        if !(0..traits.len()).any(in_scope) {
+            continue;
+        }
         let text = tokio::fs::read_to_string(path).await.map_err(|error| {
             ToolFailure::platform(format!("failed to read {}: {error}", path.display()))
         })?;
-        let active = files::exclude_ignored(&traits, &text);
+        let active = files::exclude_ignored(&traits, &text)
+            .into_iter()
+            .filter(|&index| in_scope(index))
+            .collect::<Vec<_>>();
         let display = path.to_string_lossy();
         for (start_line, excerpt) in chunks(&text) {
             let source = Source {
@@ -468,6 +492,7 @@ mod tests {
             subject: "Binding declarations.".to_string(),
             requirement: "Prefer const declarations.".to_string(),
             applicability: Some("In TypeScript, except when mutation is required.".to_string()),
+            paths: None,
             purpose: "Make immutable bindings explicit.".to_string(),
             guidance: None,
             context: None,

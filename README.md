@@ -17,8 +17,10 @@ purpose: Expose callback behavior without redundant wrappers.
 ```
 
 Each trait requires `name`, `subject`, `requirement`, and `purpose`.
-`applicability` and `guidance` are optional text fields. The Markdown body holds
-supporting context, examples, and references. Unknown frontmatter keys are
+`applicability` and `guidance` are optional text fields. `paths` is an optional
+list of worktree-relative globs, such as `"*.tsx"`, naming the only files the
+trait can apply to; other files are never sent to the model. The Markdown body
+holds supporting context, examples, and references. Unknown frontmatter keys are
 rejected. Guidance does not grant permission to act, and model assessments are
 not guarantees.
 

@@ -15,7 +15,7 @@
  Approval to edit code alone is not approval to persist a trait. Make the requested edit, but also propose the reusable rule before your final response.
  Also act on explicit requests to remember a convention. Skip one-off requirements, transient facts, and preferences already covered.
  Read existing trait files before drafting. Keep each trait concise and independently applicable, preserving scope and exceptions.
- Frontmatter has required name, subject, requirement, and purpose; optional applicability and guidance are natural-language text. The optional Markdown body is context. No arbitrary frontmatter keys or domain-specific metadata profiles are supported.
+ Frontmatter has required name, subject, requirement, and purpose; optional applicability and guidance are natural-language text, and optional paths lists worktree-relative globs for the only files a trait can apply to. The optional Markdown body is context. No arbitrary frontmatter keys or domain-specific metadata profiles are supported.
  Subject identifies what to assess; requirement is authoritative. Applicability adds circumstances and exceptions; omission adds no restriction beyond the subject. Purpose explains intent, guidance advises without granting authority, and context supports interpretation without hiding obligations.
  Call derive_trait with proposedTrait containing the complete trait object, including name and optional context. Put useful examples, fenced code diffs, references, and domain facts in context. It saves only distinct requirements; Covered means reuse an existing trait.
  Supply a complete replacement on clarification; omitted optional fields are removed. Approval and retries cover every field and the exact context.

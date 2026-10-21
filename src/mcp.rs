@@ -349,6 +349,12 @@ fn derive_schema() -> Arc<JsonObject> {
                             "type": ["string", "null"],
                             "description": "Circumstances and exceptions determining when the requirement applies. Omit when there is no additional restriction beyond the subject."
                         },
+                        "paths": {
+                            "type": ["array", "null"],
+                            "items": { "type": "string" },
+                            "minItems": 1,
+                            "description": "Worktree-relative globs, such as \"*.tsx\" or \"src/**/*.rs\", naming the only files the trait can apply to. Files that match none are never assessed. Use for file types and locations; keep situational conditions in applicability. Omit when any file may apply."
+                        },
                         "purpose": {
                             "type": "string",
                             "description": "What the trait aims to achieve or protect, and why that matters; not additional obligations."

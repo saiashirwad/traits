@@ -9,7 +9,7 @@ use traits::batching::check_traits;
 use traits::config::{Config, OperationConfig};
 use traits::doc::{Classification, Trait, TraitName};
 use traits::error::ToolFailure;
-use traits::files::Excludes;
+use traits::files::Globs;
 use traits::provider::{
     Answer, DecisionModel, DecisionResponse, GenerateRequest, LanguageModel, Models, Question,
     Usage,
@@ -109,6 +109,7 @@ fn trait_named(name: &str) -> Trait {
         subject: "Binding declarations.".to_string(),
         requirement: "Prefer const declarations.".to_string(),
         applicability: None,
+        paths: None,
         purpose: "Make immutable bindings explicit.".to_string(),
         guidance: None,
         context: None,
@@ -121,7 +122,7 @@ fn config_for(root: &std::path::Path) -> Config {
         store: root.join("traits"),
         concurrency: std::num::NonZeroUsize::new(4).unwrap(),
         exclude_gitignored: false,
-        excludes: Excludes::default(),
+        excludes: Globs::default(),
         cache_dir: None,
         classify: OperationConfig::default(),
         generate: OperationConfig::default(),
@@ -612,4 +613,70 @@ async fn a_failed_run_keeps_the_batches_that_finished() {
     let probe = repo.probe(None);
     repo.check(&config, &probe, None).await.unwrap();
     assert_eq!(asked(&probe), pairs(&["c.ts"], &TRAITS));
+}
+
+#[tokio::test]
+async fn paths_limit_which_files_each_trait_assesses() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    std::fs::create_dir_all(root.join("src/nested")).unwrap();
+    for file in ["a.ts", "b.rs", "src/nested/c.rs", "readme.md"] {
+        std::fs::write(root.join(file), "const value = 1").unwrap();
+    }
+    let scoped = |name: &str, paths: &[&str]| Trait {
+        paths: Some(
+            traits::doc::Paths::parse(paths.iter().map(|glob| (*glob).to_string()).collect())
+                .unwrap(),
+        ),
+        ..trait_named(name)
+    };
+    let store = MockStore {
+        traits: vec![
+            scoped("typescript-only", &["*.ts"]),
+            scoped("rust-in-src", &["src/**/*.rs"]),
+            trait_named("everywhere"),
+        ],
+    };
+    let probe = Arc::new(Probe::default());
+    let include = ["a.ts", "b.rs", "src/nested/c.rs", "readme.md"]
+        .iter()
+        .map(|file| (*file).to_string())
+        .collect::<Vec<_>>();
+    check_traits(
+        &config_for(root),
+        &store,
+        &probe_models(&probe),
+        &include,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+
+    let mut expected = vec![
+        ("a.ts".to_string(), "everywhere".to_string()),
+        ("a.ts".to_string(), "typescript-only".to_string()),
+        ("b.rs".to_string(), "everywhere".to_string()),
+        ("c.rs".to_string(), "everywhere".to_string()),
+        ("c.rs".to_string(), "rust-in-src".to_string()),
+        ("readme.md".to_string(), "everywhere".to_string()),
+    ];
+    expected.sort();
+    assert_eq!(asked(&probe), expected);
+
+    let unscoped_files = MockStore {
+        traits: vec![scoped("typescript-only", &["*.ts"])],
+    };
+    let probe = Arc::new(Probe::default());
+    check_traits(
+        &config_for(root),
+        &unscoped_files,
+        &probe_models(&probe),
+        &["b.rs".to_string(), "readme.md".to_string()],
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(probe.calls.load(std::sync::atomic::Ordering::SeqCst), 0);
 }

@@ -15,6 +15,7 @@ fn trait_with(name_value: &str) -> Trait {
         subject: "Asynchronous tests.".to_string(),
         requirement: "Original".to_string(),
         applicability: Some("In TypeScript and TSX, except when a synchronous framework contract must be preserved.".to_string()),
+        paths: None,
         purpose: "Preserve test lifecycle behavior.".to_string(),
         guidance: Some("Use the Effect-aware test APIs.".to_string()),
         context: Some("Supporting context.\n\n---\nExample.\n".to_string()),

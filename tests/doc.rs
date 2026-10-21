@@ -1,4 +1,4 @@
-use traits::doc::{Trait, TraitName, parse, serialize};
+use traits::doc::{Paths, Trait, TraitName, parse, serialize};
 use traits::error::ToolFailure;
 
 fn name(value: &str) -> TraitName {
@@ -11,6 +11,7 @@ fn minimal() -> Trait {
         subject: "A payment an agent is considering authorizing.".to_string(),
         requirement: "The payment must fall within delegated spending authority.".to_string(),
         applicability: None,
+        paths: None,
         purpose: "Prevent unauthorized spending.".to_string(),
         guidance: None,
         context: None,
@@ -169,6 +170,61 @@ fn roundtrip_all_fields() {
     assert_eq!(
         parse(&text, "/traits/test.md").expect("parses"),
         trait_value
+    );
+}
+
+#[test]
+fn roundtrip_paths_as_quoted_globs() {
+    let trait_value = Trait {
+        paths: Some(Paths::parse(vec!["*.tsx".to_string(), "src/**/*.rs".to_string()]).unwrap()),
+        ..minimal()
+    };
+    let text = serialize(&trait_value);
+    assert!(
+        text.contains("paths:\n  - \"*.tsx\"\n  - \"src/**/*.rs\"\n"),
+        "{text}"
+    );
+    assert_eq!(
+        parse(&text, "/traits/test.md").expect("parses"),
+        trait_value
+    );
+}
+
+#[test]
+fn rejects_paths_that_are_not_a_list_of_valid_globs() {
+    let header = "name: delegated-spending\nsubject: A payment.\nrequirement: Stay within authority.\npurpose: Protect funds.\n";
+    for paths in [
+        "paths: []",
+        "paths: \"*.ts\"",
+        "paths:",
+        "paths: [2]",
+        "paths: [\"\"]",
+        "paths: [\"src/[unclosed\"]",
+    ] {
+        let failure = parse_error(&format!("---\n{header}{paths}\n---\n"));
+        assert!(
+            failure
+                .message()
+                .contains("does not match the installed Trait schema"),
+            "{paths}: {}",
+            failure.message()
+        );
+    }
+
+    let proposal = |paths: serde_json::Value| {
+        serde_json::from_value::<Trait>(serde_json::json!({
+            "name": "delegated-spending",
+            "subject": "A payment.",
+            "requirement": "Stay within authority.",
+            "purpose": "Protect funds.",
+            "paths": paths,
+        }))
+    };
+    assert!(proposal(serde_json::json!([])).is_err());
+    assert!(proposal(serde_json::json!(["src/[unclosed"])).is_err());
+    assert_eq!(
+        proposal(serde_json::json!(["*.ts"])).unwrap().paths,
+        Some(Paths::parse(vec!["*.ts".to_string()]).unwrap())
     );
 }
 

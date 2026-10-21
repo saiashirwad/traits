@@ -5,7 +5,7 @@ use kdl::{KdlDocument, KdlNode, KdlValue};
 use serde::{Deserialize, Serialize};
 
 use crate::error::ConfigError;
-use crate::files::Excludes;
+use crate::files::Globs;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -130,7 +130,7 @@ pub struct Config {
     pub store: PathBuf,
     pub concurrency: NonZeroUsize,
     pub exclude_gitignored: bool,
-    pub excludes: Excludes,
+    pub excludes: Globs,
     /// Where `check_traits` caches answers; `None` asks every question.
     pub cache_dir: Option<PathBuf>,
     pub classify: OperationConfig,
@@ -448,7 +448,7 @@ pub fn build(raw: RawConfig, root: &Path) -> Result<Config, ConfigError> {
         concurrency: NonZeroUsize::new(usize::from(raw.concurrency.unwrap_or(4)))
             .unwrap_or(NonZeroUsize::MIN),
         exclude_gitignored: raw.exclude_gitignored.unwrap_or(true),
-        excludes: Excludes::compile(root, raw.exclude)?,
+        excludes: Globs::compile(root, raw.exclude, "exclude")?,
         cache_dir: if raw.cache.unwrap_or(true) {
             dirs::cache_dir().map(|dir| dir.join("traits"))
         } else {
