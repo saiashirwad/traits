@@ -75,6 +75,11 @@ async fn lifecycle_add_get_update_rm() {
     store.update(updated.clone()).await.expect("updates");
     assert_eq!(store.get(&initial.name).await.expect("gets"), updated);
     assert_eq!(store.ls().await.expect("lists"), vec![updated.clone()]);
+    let entries = std::fs::read_dir(store.root())
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(entries, ["test-trait.md"], "no staged file is left behind");
 
     let text = read(&file(&dir, "test-trait"));
     assert!(text.contains("name: test-trait"), "{text}");
@@ -134,6 +139,34 @@ async fn lifecycle_add_get_update_rm() {
         .await
         .expect("removes renamed");
     assert_eq!(store.ls().await.expect("lists"), Vec::<Trait>::new());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn update_writes_through_symlinks_and_keeps_permissions() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = TempDir::new().expect("tempdir");
+    let store = open(&dir).await;
+    let initial = trait_with("test-trait");
+    let elsewhere = TempDir::new().expect("tempdir");
+    let real = elsewhere.path().join("real.md");
+    std::fs::write(&real, traits::doc::serialize(&initial)).unwrap();
+    std::fs::set_permissions(&real, std::fs::Permissions::from_mode(0o640)).unwrap();
+    std::os::unix::fs::symlink(&real, file(&dir, "test-trait")).unwrap();
+
+    let updated = Trait {
+        requirement: "Replacement".to_string(),
+        ..initial
+    };
+    store.update(updated.clone()).await.expect("updates");
+
+    assert!(file(&dir, "test-trait").is_symlink());
+    assert_eq!(read(&real), traits::doc::serialize(&updated));
+    assert_eq!(
+        std::fs::metadata(&real).unwrap().permissions().mode() & 0o777,
+        0o640
+    );
 }
 
 #[tokio::test]

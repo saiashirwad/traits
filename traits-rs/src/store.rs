@@ -149,27 +149,35 @@ impl TraitStore for FileSystemStore {
         Ok(trait_value)
     }
 
+    /// Replace an existing trait by renaming a fully written, synced sibling
+    /// over the file it resolves to, so readers see the old contents or the
+    /// new ones, never a partial write. Symlinks and permissions are kept.
     async fn update(&self, trait_value: Trait) -> Result<(), ToolFailure> {
         let path = self.trait_path(trait_value.name.as_str());
         self.get(&trait_value.name).await?;
-        let contents = crate::doc::serialize(&trait_value);
-        let mut file = tokio::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(&path)
-            .await
-            .map_err(|error| {
-                ToolFailure::platform(format!("Unable to open {}: {error}", path.display()))
-            })?;
-        file.set_len(0).await.map_err(|error| {
-            ToolFailure::platform(format!("Unable to truncate {}: {error}", path.display()))
-        })?;
-        file.write_all(contents.as_bytes()).await.map_err(|error| {
+        let failed = |error: std::io::Error| {
             ToolFailure::platform(format!("Unable to write {}: {error}", path.display()))
-        })?;
-        file.flush().await.map_err(|error| {
-            ToolFailure::platform(format!("Unable to write {}: {error}", path.display()))
-        })?;
+        };
+        let target = tokio::fs::canonicalize(&path).await.map_err(failed)?;
+        let staged = target.with_file_name(format!(
+            ".{}.{}.tmp",
+            trait_value.name.as_str(),
+            uuid::Uuid::new_v4()
+        ));
+        let replaced = async {
+            let permissions = tokio::fs::metadata(&target).await?.permissions();
+            let mut file = tokio::fs::File::create(&staged).await?;
+            file.write_all(crate::doc::serialize(&trait_value).as_bytes())
+                .await?;
+            file.sync_all().await?;
+            tokio::fs::set_permissions(&staged, permissions).await?;
+            tokio::fs::rename(&staged, &target).await
+        }
+        .await;
+        if let Err(error) = replaced {
+            let _ = tokio::fs::remove_file(&staged).await;
+            return Err(failed(error));
+        }
         Ok(())
     }
 
