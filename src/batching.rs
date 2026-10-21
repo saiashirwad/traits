@@ -1,16 +1,18 @@
 //! Assessment planning and the `check_traits` orchestration.
 //!
 //! Each trait's question is rendered once. Files split into 200-line chunks,
-//! each chunk packs its active traits into byte-budgeted batches of trait
-//! indices, and every batch runs through one bounded, ordered stream that stops
-//! at the first failure.
+//! each chunk looks up its active traits in the cache and packs the misses into
+//! byte-budgeted batches, and every batch runs through one bounded, ordered
+//! stream that stops at the first failure.
 
 use std::num::NonZeroUsize;
 use std::ops::Range;
+use std::path::Path;
 
 use futures::{StreamExt, TryStreamExt, stream};
 use serde_json::{Map, Value, json};
 
+use crate::cache::{self, Key, Keys};
 use crate::config::Config;
 use crate::doc::{
     Assessment, Classification, Probabilities, Source, SourceLocation, Trait, TraitEvaluation,
@@ -64,7 +66,15 @@ pub async fn check_traits(
     );
 
     let questions = Questions::new(&traits)?;
-    let mut plan = Plan::new(circumstances);
+    let provider = match &config.classify.provider {
+        Some(provider) => json!({
+            "kind": provider.kind.as_str(),
+            "model": provider.model,
+            "baseUrl": provider.base_url,
+        }),
+        None => Value::Null,
+    };
+    let mut plan = Plan::new(circumstances, &provider, config.cache_dir.as_deref())?;
     for path in &paths {
         let text = tokio::fs::read_to_string(path).await.map_err(|error| {
             ToolFailure::platform(format!("failed to read {}: {error}", path.display()))
@@ -83,6 +93,16 @@ pub async fn check_traits(
         }
     }
 
+    tracing::debug!(
+        pairs = plan.pairs.len(),
+        cached = plan
+            .pairs
+            .iter()
+            .filter(|pair| pair.cached.is_some())
+            .count(),
+        requests = plan.batches.len(),
+        "check_traits planned"
+    );
     let verdicts = plan.assess(models, &questions, config.concurrency).await?;
     Ok(verdicts
         .iter()
@@ -106,11 +126,12 @@ fn chunks(text: &str) -> impl Iterator<Item = (u32, &str)> {
     })
 }
 
-/// The selected traits, each with its assessment question rendered once.
+/// The selected traits, each with its assessment question rendered and
+/// encoded once.
 struct Questions<'a> {
     traits: &'a [Trait],
     instructions: Vec<String>,
-    bytes: Vec<usize>,
+    encoded: Vec<Vec<u8>>,
 }
 
 impl<'a> Questions<'a> {
@@ -119,17 +140,17 @@ impl<'a> Questions<'a> {
             .iter()
             .map(assessment_instructions)
             .collect::<Vec<_>>();
-        let bytes = traits
+        let encoded = traits
             .iter()
             .zip(&instructions)
             .map(|(trait_value, instructions)| {
-                serialized_len(&question_json(trait_value.name.as_str(), instructions))
+                encode(&question_json(trait_value.name.as_str(), instructions))
             })
             .collect::<Result<_, _>>()?;
         Ok(Self {
             traits,
             instructions,
-            bytes,
+            encoded,
         })
     }
 
@@ -148,6 +169,15 @@ struct Batch {
     members: Range<usize>,
 }
 
+/// One trait's question about one source, with its cached assessment when the
+/// cache has one.
+struct Pair {
+    source: usize,
+    trait_index: usize,
+    key: Key,
+    cached: Option<Assessment>,
+}
+
 /// One trait's assessment of one source.
 struct Verdict {
     source: usize,
@@ -155,26 +185,35 @@ struct Verdict {
     assessment: Assessment,
 }
 
-/// Every source excerpt and the trait batches that assess it. Batches index
-/// `members`, which index the trait questions.
+/// Every source excerpt, its trait pairs in finding order, and the batches
+/// that ask the uncached pairs. Batches index `members`, which index `pairs`.
 #[derive(Default)]
 struct Plan<'a> {
     circumstances: Option<&'a str>,
+    provider: Vec<u8>,
+    cache_dir: Option<&'a Path>,
     sources: Vec<Source>,
+    pairs: Vec<Pair>,
     members: Vec<usize>,
     batches: Vec<Batch>,
 }
 
 impl<'a> Plan<'a> {
-    fn new(circumstances: Option<&'a str>) -> Self {
-        Self {
+    fn new(
+        circumstances: Option<&'a str>,
+        provider: &Value,
+        cache_dir: Option<&'a Path>,
+    ) -> Result<Self, ToolFailure> {
+        Ok(Self {
             circumstances,
+            provider: encode(provider)?,
+            cache_dir,
             ..Self::default()
-        }
+        })
     }
 
-    /// Pack the `active` trait indices that assess `source` into batches that
-    /// fit the request budget.
+    /// Look up the `active` trait indices that assess `source` in the cache,
+    /// then pack the misses into batches that fit the request budget.
     fn add(
         &mut self,
         questions: &Questions<'_>,
@@ -184,12 +223,27 @@ impl<'a> Plan<'a> {
         if active.is_empty() {
             return Ok(());
         }
-        let input_bytes = serialized_len(&input_json(&source, self.circumstances))?;
+        let input = encode(&input_json(&source, self.circumstances))?;
+        let keys = Keys::new(&self.provider, &input);
+        let input_bytes = input.len();
         let index = self.sources.len();
         let mut start = self.members.len();
         let mut bytes = input_bytes;
         for &trait_index in active {
-            let question_bytes = questions.bytes[trait_index];
+            let key = keys.key(&questions.encoded[trait_index]);
+            let cached = self.cache_dir.and_then(|dir| cache::read(dir, key));
+            let pair = self.pairs.len();
+            let hit = cached.is_some();
+            self.pairs.push(Pair {
+                source: index,
+                trait_index,
+                key,
+                cached,
+            });
+            if hit {
+                continue;
+            }
+            let question_bytes = questions.encoded[trait_index].len();
             if input_bytes + question_bytes > MAX_BYTES {
                 return Err(ToolFailure::too_large(
                     questions.traits[trait_index].name.as_str(),
@@ -207,19 +261,22 @@ impl<'a> Plan<'a> {
                 start = self.members.len();
                 bytes = input_bytes;
             }
-            self.members.push(trait_index);
+            self.members.push(pair);
             bytes += question_bytes;
         }
-        self.batches.push(Batch {
-            source: index,
-            members: start..self.members.len(),
-        });
+        if self.members.len() > start {
+            self.batches.push(Batch {
+                source: index,
+                members: start..self.members.len(),
+            });
+        }
         self.sources.push(source);
         Ok(())
     }
 
-    /// Run every batch, at most `concurrency` at a time, in plan order. The
-    /// first failure drops the requests still in flight and starts no more.
+    /// Run every batch, at most `concurrency` at a time, in plan order, and
+    /// merge the answers with the cached pairs. The first failure drops the
+    /// requests still in flight and starts no more.
     async fn assess(
         &self,
         models: &Models,
@@ -227,40 +284,55 @@ impl<'a> Plan<'a> {
         concurrency: NonZeroUsize,
     ) -> Result<Vec<Verdict>, ToolFailure> {
         let requests = (0..self.batches.len()).map(|batch| self.decide(models, questions, batch));
-        let answers: Vec<Vec<Answer>> = stream::iter(requests)
+        let answers: Vec<Vec<Assessment>> = stream::iter(requests)
             .buffered(concurrency.get())
             .try_collect()
             .await?;
 
+        let mut fresh = answers.into_iter().flatten();
         Ok(self
-            .batches
+            .pairs
             .iter()
-            .zip(answers)
-            .flat_map(|(batch, answers)| {
-                self.members[batch.members.clone()].iter().zip(answers).map(
-                    |(&trait_index, answer)| Verdict {
-                        source: batch.source,
-                        trait_index,
-                        assessment: assessment(&answer),
-                    },
-                )
+            .map(|pair| Verdict {
+                source: pair.source,
+                trait_index: pair.trait_index,
+                assessment: pair
+                    .cached
+                    .clone()
+                    .or_else(|| fresh.next())
+                    .expect("batches answer every uncached pair in order"),
             })
             .collect())
     }
 
+    /// Ask one batch, caching each conclusive assessment as soon as it
+    /// arrives so a later failure keeps it.
     async fn decide(
         &self,
         models: &Models,
         questions: &Questions<'_>,
         batch: usize,
-    ) -> Result<Vec<Answer>, ToolFailure> {
+    ) -> Result<Vec<Assessment>, ToolFailure> {
         let batch = &self.batches[batch];
-        let asked = self.members[batch.members.clone()]
+        let members = &self.members[batch.members.clone()];
+        let asked = members
             .iter()
-            .map(|&trait_index| questions.question(trait_index))
+            .map(|&pair| questions.question(self.pairs[pair].trait_index))
             .collect::<Vec<_>>();
         let input = input_json(&self.sources[batch.source], self.circumstances);
-        provider::decide(models.decision.as_ref(), &input, &asked).await
+        let assessments = provider::decide(models.decision.as_ref(), &input, &asked)
+            .await?
+            .iter()
+            .map(assessment)
+            .collect::<Vec<_>>();
+        if let Some(dir) = self.cache_dir {
+            for (&pair, assessment) in members.iter().zip(&assessments) {
+                if assessment.classification != Classification::Inconclusive {
+                    cache::write(dir, self.pairs[pair].key, assessment).await;
+                }
+            }
+        }
+        Ok(assessments)
     }
 
     fn evaluation(&self, questions: &Questions<'_>, verdict: &Verdict) -> TraitEvaluation {
@@ -315,12 +387,10 @@ fn question_json(name: &str, instructions: &str) -> Value {
     json!({ name: { "instructions": instructions, "criteria": criteria } })
 }
 
-fn serialized_len(value: &Value) -> Result<usize, ToolFailure> {
-    serde_json::to_vec(value)
-        .map(|bytes| bytes.len())
-        .map_err(|error| {
-            ToolFailure::platform(format!("failed to measure decision request: {error}"))
-        })
+fn encode(value: &Value) -> Result<Vec<u8>, ToolFailure> {
+    serde_json::to_vec(value).map_err(|error| {
+        ToolFailure::platform(format!("failed to encode decision request: {error}"))
+    })
 }
 
 #[cfg(test)]
@@ -418,7 +488,7 @@ mod tests {
         source: Source,
     ) -> Result<Vec<TraitEvaluation>, ToolFailure> {
         let questions = Questions::new(traits)?;
-        let mut plan = Plan::new(None);
+        let mut plan = Plan::new(None, &Value::Null, None)?;
         let active = (0..traits.len()).collect::<Vec<_>>();
         plan.add(&questions, source, &active)?;
         let verdicts = plan

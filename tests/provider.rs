@@ -100,6 +100,7 @@ fn test_config(classify: ProviderConfig, generate: ProviderConfig) -> Config {
         concurrency: std::num::NonZeroUsize::MIN,
         exclude_gitignored: true,
         excludes: Excludes::default(),
+        cache_dir: None,
         classify: OperationConfig {
             provider: Some(classify.clone()),
             temperature: None,

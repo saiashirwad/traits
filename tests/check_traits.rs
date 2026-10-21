@@ -122,6 +122,7 @@ fn config_for(root: &std::path::Path) -> Config {
         concurrency: std::num::NonZeroUsize::new(4).unwrap(),
         exclude_gitignored: false,
         excludes: Excludes::default(),
+        cache_dir: None,
         classify: OperationConfig::default(),
         generate: OperationConfig::default(),
         providers: Vec::new(),
@@ -305,7 +306,9 @@ async fn unknown_trait_names_fail_and_empty_selections_return_nothing() {
 
 #[derive(Default)]
 struct Probe {
-    fail_first: bool,
+    fail_on: Option<usize>,
+    decision: MockDecision,
+    asked: std::sync::Mutex<Vec<(String, String)>>,
     calls: std::sync::atomic::AtomicUsize,
     in_flight: std::sync::atomic::AtomicUsize,
     peak: std::sync::atomic::AtomicUsize,
@@ -319,14 +322,24 @@ impl DecisionModel for Probe {
         questions: &[Question<'_>],
     ) -> Result<DecisionResponse, ToolFailure> {
         use std::sync::atomic::Ordering::SeqCst;
-        if self.calls.fetch_add(1, SeqCst) == 0 && self.fail_first {
-            return Err(ToolFailure::ai("first request failed"));
+        let file = state["source"]["location"]["path"]
+            .as_str()
+            .and_then(|path| std::path::Path::new(path).file_name())
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        self.asked.lock().unwrap().extend(
+            questions
+                .iter()
+                .map(|question| (file.clone(), question.id.to_string())),
+        );
+        if Some(self.calls.fetch_add(1, SeqCst)) == self.fail_on {
+            return Err(ToolFailure::ai("request failed"));
         }
         let now = self.in_flight.fetch_add(1, SeqCst) + 1;
         self.peak.fetch_max(now, SeqCst);
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         self.in_flight.fetch_sub(1, SeqCst);
-        MockDecision::default().decide(state, questions).await
+        self.decision.decide(state, questions).await
     }
 }
 
@@ -382,7 +395,7 @@ async fn a_failed_request_stops_the_remaining_batches() {
         traits: vec![trait_named("always-compliant")],
     };
     let probe = Arc::new(Probe {
-        fail_first: true,
+        fail_on: Some(0),
         ..Probe::default()
     });
     let mut config = config_for(root);
@@ -397,4 +410,206 @@ async fn a_failed_request_stops_the_remaining_batches() {
         probe.calls.load(std::sync::atomic::Ordering::SeqCst) <= 2,
         "no batch starts after the failure"
     );
+}
+
+fn asked(probe: &Probe) -> Vec<(String, String)> {
+    let mut asked = probe.asked.lock().unwrap().clone();
+    asked.sort();
+    asked
+}
+
+fn pairs(files: &[&str], traits: &[&str]) -> Vec<(String, String)> {
+    let mut pairs = files
+        .iter()
+        .flat_map(|file| {
+            traits
+                .iter()
+                .map(|name| ((*file).to_string(), (*name).to_string()))
+        })
+        .collect::<Vec<_>>();
+    pairs.sort();
+    pairs
+}
+
+/// A repository of three one-chunk files, a cache in its own tempdir, and two
+/// traits, both reported as violations so every pair is a finding.
+struct Cached {
+    root: tempfile::TempDir,
+    cache: tempfile::TempDir,
+    store: MockStore,
+}
+
+const FILES: [&str; 3] = ["a.ts", "b.ts", "c.ts"];
+const TRAITS: [&str; 2] = ["first-trait", "second-trait"];
+
+impl Cached {
+    fn new() -> Self {
+        let root = tempfile::tempdir().unwrap();
+        for file in FILES {
+            std::fs::write(root.path().join(file), format!("const {} = 1", &file[..1])).unwrap();
+        }
+        Self {
+            root,
+            cache: tempfile::tempdir().unwrap(),
+            store: MockStore {
+                traits: TRAITS.iter().map(|name| trait_named(name)).collect(),
+            },
+        }
+    }
+
+    fn config(&self) -> Config {
+        let mut config = config_for(self.root.path());
+        config.cache_dir = Some(self.cache.path().to_path_buf());
+        config
+    }
+
+    fn probe(&self, fail_on: Option<usize>) -> Arc<Probe> {
+        Arc::new(Probe {
+            fail_on,
+            decision: MockDecision {
+                violation: TRAITS.iter().map(|name| (*name).to_string()).collect(),
+                inconclusive: Vec::new(),
+            },
+            ..Probe::default()
+        })
+    }
+
+    async fn check(
+        &self,
+        config: &Config,
+        probe: &Arc<Probe>,
+        circumstances: Option<&str>,
+    ) -> Result<Vec<traits::doc::TraitEvaluation>, ToolFailure> {
+        let include = FILES
+            .iter()
+            .map(|file| (*file).to_string())
+            .collect::<Vec<_>>();
+        check_traits(
+            config,
+            &self.store,
+            &probe_models(probe),
+            &include,
+            None,
+            circumstances,
+        )
+        .await
+    }
+}
+
+#[tokio::test]
+async fn a_second_identical_run_asks_nothing_and_returns_the_same_findings() {
+    let repo = Cached::new();
+    let cold = repo.probe(None);
+    let first = repo.check(&repo.config(), &cold, None).await.unwrap();
+    assert_eq!(asked(&cold), pairs(&FILES, &TRAITS));
+
+    let warm = repo.probe(None);
+    let second = repo.check(&repo.config(), &warm, None).await.unwrap();
+    assert_eq!(warm.calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+    assert_eq!(second, first);
+}
+
+#[tokio::test]
+async fn editing_one_file_reasks_only_its_chunks_and_keeps_finding_order() {
+    let repo = Cached::new();
+    repo.check(&repo.config(), &repo.probe(None), None)
+        .await
+        .unwrap();
+    std::fs::write(repo.root.path().join("b.ts"), "let b = 2").unwrap();
+
+    let probe = repo.probe(None);
+    let merged = repo.check(&repo.config(), &probe, None).await.unwrap();
+    assert_eq!(asked(&probe), pairs(&["b.ts"], &TRAITS));
+
+    let mut uncached = repo.config();
+    uncached.cache_dir = None;
+    let expected = repo
+        .check(&uncached, &repo.probe(None), None)
+        .await
+        .unwrap();
+    assert_eq!(merged, expected);
+}
+
+#[tokio::test]
+async fn editing_a_trait_reasks_only_that_trait() {
+    let mut repo = Cached::new();
+    repo.check(&repo.config(), &repo.probe(None), None)
+        .await
+        .unwrap();
+    repo.store.traits[1].requirement = "Prefer let declarations.".to_string();
+
+    let probe = repo.probe(None);
+    repo.check(&repo.config(), &probe, None).await.unwrap();
+    assert_eq!(asked(&probe), pairs(&FILES, &["second-trait"]));
+}
+
+#[tokio::test]
+async fn changing_circumstances_reasks_every_pair() {
+    let repo = Cached::new();
+    repo.check(&repo.config(), &repo.probe(None), None)
+        .await
+        .unwrap();
+
+    let changed = repo.probe(None);
+    repo.check(&repo.config(), &changed, Some("after a refactor"))
+        .await
+        .unwrap();
+    assert_eq!(asked(&changed), pairs(&FILES, &TRAITS));
+
+    let repeated = repo.probe(None);
+    repo.check(&repo.config(), &repeated, Some("after a refactor"))
+        .await
+        .unwrap();
+    assert!(asked(&repeated).is_empty());
+}
+
+#[tokio::test]
+async fn a_disabled_cache_always_asks() {
+    let repo = Cached::new();
+    let mut config = repo.config();
+    config.cache_dir = None;
+    for _ in 0..2 {
+        let probe = repo.probe(None);
+        repo.check(&config, &probe, None).await.unwrap();
+        assert_eq!(asked(&probe), pairs(&FILES, &TRAITS));
+    }
+    assert_eq!(std::fs::read_dir(repo.cache.path()).unwrap().count(), 0);
+}
+
+#[tokio::test]
+async fn inconclusive_answers_are_asked_again() {
+    let repo = Cached::new();
+    let inconclusive = || {
+        Arc::new(Probe {
+            decision: MockDecision {
+                violation: Vec::new(),
+                inconclusive: vec!["second-trait".to_string()],
+            },
+            ..Probe::default()
+        })
+    };
+    repo.check(&repo.config(), &inconclusive(), None)
+        .await
+        .unwrap();
+
+    let probe = inconclusive();
+    let findings = repo.check(&repo.config(), &probe, None).await.unwrap();
+    assert_eq!(asked(&probe), pairs(&FILES, &["second-trait"]));
+    assert_eq!(findings.len(), FILES.len());
+}
+
+#[tokio::test]
+async fn a_failed_run_keeps_the_batches_that_finished() {
+    let repo = Cached::new();
+    let mut config = repo.config();
+    config.concurrency = std::num::NonZeroUsize::MIN;
+    let error = repo
+        .check(&config, &repo.probe(Some(2)), None)
+        .await
+        .unwrap_err();
+    assert!(matches!(error, ToolFailure::AiError { .. }), "{error:?}");
+
+    let probe = repo.probe(None);
+    repo.check(&config, &probe, None).await.unwrap();
+    assert_eq!(asked(&probe), pairs(&["c.ts"], &TRAITS));
 }

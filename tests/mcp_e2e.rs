@@ -118,7 +118,7 @@ fn write_config(dir: &Path, base_url: &str) {
     std::fs::write(
         dir.join("traits.kdl"),
         format!(
-            "provider \"mock\" {{\n    kind \"custom\"\n    model \"mock-model\"\n    base-url \"{base_url}\"\n    api-key-env \"MOCK_API_KEY\"\n}}\ndefault-provider \"mock\"\nexclude-gitignored #false\n"
+            "provider \"mock\" {{\n    kind \"custom\"\n    model \"mock-model\"\n    base-url \"{base_url}\"\n    api-key-env \"MOCK_API_KEY\"\n}}\ndefault-provider \"mock\"\nexclude-gitignored #false\ncache #false\n"
         ),
     )
     .unwrap();

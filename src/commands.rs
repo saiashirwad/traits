@@ -25,6 +25,7 @@ default-provider "opencode"
 // Optional project overrides:
 // concurrency 4
 // exclude-gitignored #true
+// cache #true
 // exclude "repos/**"
 // exclude "**/dist/**"
 "#;
@@ -117,8 +118,12 @@ pub async fn check(
     trait_names: Vec<String>,
     circumstances: Option<String>,
     json: bool,
+    no_cache: bool,
 ) -> Result<u8, String> {
-    let ready = build_state(config_path).await?;
+    let mut ready = build_state(config_path).await?;
+    if no_cache {
+        ready.config.cache_dir = None;
+    }
     let names = trait_names
         .iter()
         .map(|name| TraitName::parse(name))
@@ -214,6 +219,10 @@ pub fn config_check(config_path: Option<&Path>) -> Result<(), String> {
     println!("store: {}", config.store.display());
     println!("concurrency: {}", config.concurrency);
     println!("exclude-gitignored: {}", config.exclude_gitignored);
+    match &config.cache_dir {
+        Some(dir) => println!("cache: {}", dir.display()),
+        None => println!("cache: off"),
+    }
     if !config.excludes.patterns().is_empty() {
         println!("excludes: {}", config.excludes.patterns().join(", "));
     }

@@ -83,6 +83,12 @@ Provider kinds: `typesafe`, `opencode-go`, `deepseek`, `openrouter`, `openai`,
 `timeout-ms`, `header "name" "value"`. `classify` and `generate` accept
 `provider`, `temperature`, and `max-tokens`.
 
+`check_traits` caches each conclusive answer in the user cache directory
+(`~/Library/Caches/traits` on macOS, `~/.cache/traits` on Linux), keyed by a
+hash of the provider, the trait's question, and the chunk it assessed. A rerun
+asks only about changed files, changed traits, or new circumstances. Turn it
+off with `cache #false`, or for one run with `traits check --no-cache`.
+
 Add the server to your agent's MCP configuration:
 
 ```json
@@ -97,15 +103,15 @@ traits skill install --agent project
 
 ## CLI
 
-| Command                                                                  | Purpose                              |
-| ------------------------------------------------------------------------ | ------------------------------------ |
-| `traits`                                                                 | MCP stdio server when stdin is piped |
-| `traits serve`                                                           | MCP stdio server                     |
-| `traits init [--force]`                                                  | Starter `traits.kdl` and store       |
-| `traits check [patterns] [--trait NAME] [--circumstances TEXT] [--json]` | Assess files; exits 1 on violations  |
-| `traits trait ls`, `show NAME`, `rm NAME`                                | Inspect the store                    |
-| `traits config check`                                                    | Validate the resolved configuration  |
-| `traits skill install --agent project\|opencode\|claude\|all`            | Write the agent skill                |
+| Command                                                                               | Purpose                              |
+| ------------------------------------------------------------------------------------- | ------------------------------------ |
+| `traits`                                                                              | MCP stdio server when stdin is piped |
+| `traits serve`                                                                        | MCP stdio server                     |
+| `traits init [--force]`                                                               | Starter `traits.kdl` and store       |
+| `traits check [patterns] [--trait NAME] [--circumstances TEXT] [--json] [--no-cache]` | Assess files; exits 1 on violations  |
+| `traits trait ls`, `show NAME`, `rm NAME`                                             | Inspect the store                    |
+| `traits config check`                                                                 | Validate the resolved configuration  |
+| `traits skill install --agent project\|opencode\|claude\|all`                         | Write the agent skill                |
 
 ## Repository layout
 
@@ -128,6 +134,7 @@ traits skill install --agent project
 | `config.rs`                | KDL parsing, merge, provider resolution                    |
 | `provider/`                | TypeSafe decisions and OpenAI-compatible chat              |
 | `prompt.rs`, `batching.rs` | Assessment prompts, batching, `check_traits`               |
+| `cache.rs`                 | Content-addressed `check_traits` answers                   |
 | `files.rs`                 | `git ls-files`, glob includes, excludes, ignore directives |
 | `conflict.rs`, `derive.rs` | Relationship checks, derive and reconcile                  |
 | `mcp.rs`                   | MCP tools, approval elicitation, fallback diagnostics      |

@@ -42,6 +42,9 @@ enum Command {
         /// Print findings as JSON
         #[arg(long)]
         json: bool,
+        /// Ask every question instead of reusing cached answers
+        #[arg(long)]
+        no_cache: bool,
     },
     /// Inspect the trait store
     Trait {
@@ -110,7 +113,8 @@ async fn main() -> ExitCode {
             trait_names,
             circumstances,
             json,
-        }) => commands::check(config, patterns, trait_names, circumstances, json).await,
+            no_cache,
+        }) => commands::check(config, patterns, trait_names, circumstances, json, no_cache).await,
         Some(Command::Trait { command }) => match command {
             TraitCommand::Ls => commands::trait_ls(config).await.map(|_| 0),
             TraitCommand::Show { name } => commands::trait_show(config, &name).await.map(|_| 0),

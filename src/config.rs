@@ -42,18 +42,35 @@ pub enum ProviderKind {
 }
 
 impl ProviderKind {
-    fn parse(value: &str) -> Result<Self, ConfigError> {
-        match value {
-            "typesafe" => Ok(Self::Typesafe),
-            "opencode-go" => Ok(Self::OpenCodeGo),
-            "deepseek" => Ok(Self::DeepSeek),
-            "openrouter" => Ok(Self::OpenRouter),
-            "openai" => Ok(Self::OpenAi),
-            "custom" => Ok(Self::Custom),
-            other => Err(ConfigError::new(format!(
-                "Unknown provider kind \"{other}\"; expected typesafe, opencode-go, deepseek, openrouter, openai, or custom"
-            ))),
+    const ALL: [Self; 6] = [
+        Self::Typesafe,
+        Self::OpenCodeGo,
+        Self::DeepSeek,
+        Self::OpenRouter,
+        Self::OpenAi,
+        Self::Custom,
+    ];
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Typesafe => "typesafe",
+            Self::OpenCodeGo => "opencode-go",
+            Self::DeepSeek => "deepseek",
+            Self::OpenRouter => "openrouter",
+            Self::OpenAi => "openai",
+            Self::Custom => "custom",
         }
+    }
+
+    fn parse(value: &str) -> Result<Self, ConfigError> {
+        Self::ALL
+            .into_iter()
+            .find(|kind| kind.as_str() == value)
+            .ok_or_else(|| {
+                ConfigError::new(format!(
+                    "Unknown provider kind \"{value}\"; expected typesafe, opencode-go, deepseek, openrouter, openai, or custom"
+                ))
+            })
     }
 
     fn base_url(&self) -> Option<&'static str> {
@@ -114,6 +131,8 @@ pub struct Config {
     pub concurrency: NonZeroUsize,
     pub exclude_gitignored: bool,
     pub excludes: Excludes,
+    /// Where `check_traits` caches answers; `None` asks every question.
+    pub cache_dir: Option<PathBuf>,
     pub classify: OperationConfig,
     pub generate: OperationConfig,
     pub providers: Vec<ProviderConfig>,
@@ -194,6 +213,7 @@ pub fn parse_str(text: &str) -> Result<RawConfig, ConfigError> {
                 raw.exclude_gitignored = Some(bool_flag(node, "exclude-gitignored")?)
             }
             "exclude" => raw.exclude.push(string_arg(node, 0, "exclude")?),
+            "cache" => raw.cache = Some(bool_flag(node, "cache")?),
             "default-provider" => {
                 raw.default_provider = Some(string_arg(node, 0, "default-provider")?)
             }
@@ -330,6 +350,7 @@ pub fn merge(global: RawConfig, project: RawConfig) -> RawConfig {
         concurrency: project.concurrency.or(global.concurrency),
         exclude_gitignored: project.exclude_gitignored.or(global.exclude_gitignored),
         exclude: excludes,
+        cache: project.cache.or(global.cache),
         default_provider: project.default_provider.or(global.default_provider),
         provider: providers,
         classify: merge_operation(global.classify, project.classify),
@@ -428,6 +449,11 @@ pub fn build(raw: RawConfig, root: &Path) -> Result<Config, ConfigError> {
             .unwrap_or(NonZeroUsize::MIN),
         exclude_gitignored: raw.exclude_gitignored.unwrap_or(true),
         excludes: Excludes::compile(root, raw.exclude)?,
+        cache_dir: if raw.cache.unwrap_or(true) {
+            dirs::cache_dir().map(|dir| dir.join("traits"))
+        } else {
+            None
+        },
         classify,
         generate,
         providers,
@@ -441,6 +467,7 @@ pub struct RawConfig {
     pub concurrency: Option<u16>,
     pub exclude_gitignored: Option<bool>,
     pub exclude: Vec<String>,
+    pub cache: Option<bool>,
     pub default_provider: Option<String>,
     pub provider: Vec<RawProvider>,
     pub classify: Option<RawOperation>,
@@ -561,6 +588,21 @@ mod tests {
         let raw = parse_str("exclude-gitignored #false").unwrap();
         let config = build(raw, &root()).unwrap();
         assert!(!config.exclude_gitignored);
+    }
+
+    #[test]
+    fn caches_under_the_user_cache_dir_unless_disabled() {
+        let config = build(RawConfig::default(), &root()).unwrap();
+        assert_eq!(
+            config.cache_dir,
+            dirs::cache_dir().map(|dir| dir.join("traits"))
+        );
+
+        let disabled = merge(
+            parse_str("cache").unwrap(),
+            parse_str("cache #false").unwrap(),
+        );
+        assert_eq!(build(disabled, &root()).unwrap().cache_dir, None);
     }
 
     #[test]

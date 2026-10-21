@@ -324,6 +324,7 @@ mod tests {
             concurrency: std::num::NonZeroUsize::new(4).unwrap(),
             exclude_gitignored: false,
             excludes: Excludes::compile(root, excludes).unwrap(),
+            cache_dir: None,
             classify: Default::default(),
             generate: Default::default(),
             providers: Vec::new(),
