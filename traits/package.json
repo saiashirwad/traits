@@ -8,10 +8,12 @@
     "directory": "traits"
   },
   "bin": {
-    "traits": "./dist/bin.js"
+    "traits": "./bin.js"
   },
   "files": [
     "*.ts",
+    "bin.js",
+    "ts-loader.js",
     "!vite.config.ts",
     "_util/**/*.ts",
     "skills/**/*.md",
@@ -33,6 +35,9 @@
     "./index": null
   },
   "publishConfig": {
+    "bin": {
+      "traits": "./dist/bin.js"
+    },
     "exports": {
       "./package.json": "./package.json",
       ".": "./dist/index.js",

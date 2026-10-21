@@ -9,7 +9,8 @@ allowBuilds:
 catalog:
   "@changesets/changelog-github": 1.0.1
   "@changesets/cli": 3.0.3
-  "@effect/ai-openrouter": 4.0.0
+  "@effect/ai-openai-compat": 4.0.0
+  "@effect/ai-typesafe": 4.0.0
   "@effect/atom-react": 4.0.0
   "@effect/platform-browser": 4.0.0
   "@effect/platform-node": 4.0.0

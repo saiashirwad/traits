@@ -6,6 +6,9 @@ importers:
   .:
     configDependencies: {}
     packageManagerDependencies:
+      '@pnpm/exe':
+        specifier: 12.8.1
+        version: 12.8.1
       pnpm:
         specifier: 12.8.1
         version: 12.8.1
@@ -89,6 +92,11 @@ packages:
     cpu: [x64]
     os: [win32]
 
+  '@pnpm/exe@12.8.1':
+    resolution: {integrity: sha512-ju5MeefhEEXI7NO3u6oj54uGBOkN0pVhI+tcmuZDkTTqVdRZvEVEo+zhjwAoe8vEXguQCvsa6cTDhmFPxpOXeQ==}
+    engines: {node: '>=18.*'}
+    hasBin: true
+
   pnpm@12.8.1:
     resolution: {integrity: sha512-9kupB1B/XOr+BsjTjmBS0BeURFgOwSed3Vv8EctIqoomRLZlmOB+dh2oSHKp/FfV+QK4f6SdAkGY1VhhKqu+RQ==}
     engines: {node: '>=18.*'}
@@ -138,6 +146,23 @@ snapshots:
   '@pnpm/exe.win32-x64@12.8.1':
     optional: true
 
+  '@pnpm/exe@12.8.1':
+    optionalDependencies:
+      '@pnpm/exe.android-arm64': 12.8.1
+      '@pnpm/exe.android-x64': 12.8.1
+      '@pnpm/exe.darwin-arm64': 12.8.1
+      '@pnpm/exe.darwin-x64': 12.8.1
+      '@pnpm/exe.freebsd-x64': 12.8.1
+      '@pnpm/exe.linux-arm64': 12.8.1
+      '@pnpm/exe.linux-arm64-musl': 12.8.1
+      '@pnpm/exe.linux-ppc64': 12.8.1
+      '@pnpm/exe.linux-riscv64': 12.8.1
+      '@pnpm/exe.linux-s390x': 12.8.1
+      '@pnpm/exe.linux-x64': 12.8.1
+      '@pnpm/exe.linux-x64-musl': 12.8.1
+      '@pnpm/exe.win32-arm64': 12.8.1
+      '@pnpm/exe.win32-x64': 12.8.1
+
   pnpm@12.8.1:
     optionalDependencies:
       '@pnpm/exe.android-arm64': 12.8.1
@@ -170,7 +195,10 @@ catalogs:
     '@changesets/cli':
       specifier: 3.0.3
       version: 3.0.3
-    '@effect/ai-openrouter':
+    '@effect/ai-openai-compat':
+      specifier: 4.0.0
+      version: 4.0.0
+    '@effect/ai-typesafe':
       specifier: 4.0.0
       version: 4.0.0
     '@effect/atom-react':
@@ -245,7 +273,10 @@ importers:
       '@changesets/cli':
         specifier: 'catalog:'
         version: 3.0.3
-      '@effect/ai-openrouter':
+      '@effect/ai-openai-compat':
+        specifier: 'catalog:'
+        version: 4.0.0(effect@4.0.0)
+      '@effect/ai-typesafe':
         specifier: 'catalog:'
         version: 4.0.0(effect@4.0.0)
       '@effect/platform-node':
@@ -581,8 +612,13 @@ packages:
   '@drizzle-team/brocli@0.12.1':
     resolution: {integrity: sha512-yHwomvolVafvUXhy5TdiJVkuNCxXn+bKOs2aWiWEQh/5YaV97Oa/abJz3dmx7lxgIUsUlS1Jl4mEfvJPo3YsVw==}
 
-  '@effect/ai-openrouter@4.0.0':
-    resolution: {integrity: sha512-FlQHomqreGlC/Fj1vfTyk3kZ5MD+Be5rjEumFshtnGsmi+bE1uRDbHjdbAbVitpDQJGQKRxqwhPMOfgF6J3Gfw==}
+  '@effect/ai-openai-compat@4.0.0':
+    resolution: {integrity: sha512-zoFwI5M7pUEj4UMHMbPsQGaVRxirIAIqzfVZAtpjJPXWwd/acwxN4kI1nS9gfn/lCHvFIc9xPEMstforcODesw==}
+    peerDependencies:
+      effect: ^4.0.0
+
+  '@effect/ai-typesafe@4.0.0':
+    resolution: {integrity: sha512-TbInR017yf4KFAYD1jTSr9pkQrob1+9UNyW6KKRHHGfmD8j121f41fOf+60RJ7IIBl/XOUAURC8/Mj7aWkGZtg==}
     peerDependencies:
       effect: ^4.0.0
 
@@ -3337,7 +3373,11 @@ snapshots:
   '@drizzle-team/brocli@0.12.1':
     optional: true
 
-  '@effect/ai-openrouter@4.0.0(effect@4.0.0)':
+  '@effect/ai-openai-compat@4.0.0(effect@4.0.0)':
+    dependencies:
+      effect: 4.0.0
+
+  '@effect/ai-typesafe@4.0.0(effect@4.0.0)':
     dependencies:
       effect: 4.0.0
 

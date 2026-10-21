@@ -27,6 +27,27 @@ configuration to make installation succeed. If setup conflicts with those
 settings, explain the conflict and ask before changing them. Never expose
 registry credentials.
 
+Traits is distributed from this GitHub repository, not the npm registry. When
+the configured package manager supports Git subdirectories, install the `traits`
+subdirectory directly:
+
+```sh
+pnpm add "github:saiashirwad/traits#path:/traits"
+```
+
+For package managers without Git-subdirectory support, clone the repository
+outside the checkout and add the `traits` subdirectory as a local directory
+dependency instead:
+
+```sh
+git clone https://github.com/saiashirwad/traits.git ~/.cache/traits
+```
+
+Adapt the install command to the configured package manager, and do not request
+the `traits` package from the npm registry. `git -C ~/.cache/traits pull`
+updates a cloned checkout. Preserve the project's dependency-placement and
+install-script policies when adding the dependency.
+
 Ensure `traits`, `effect`, and `@effect/platform-node` are available to the
 checkout that runs Traits. Reuse compatible dependencies already supplied by the
 workspace; install only what is missing. Check resolution from the config's
@@ -72,11 +93,94 @@ choose them from
 `https://openrouter.ai/api/v1/models?output_modalities=decisions`. Choose
 language models that support structured output.
 
+**OpenCode Go and TypeSafe.** OpenCode Go serves chat models through an
+OpenAI-compatible chat completions API, and TypeSafe supplies decision models.
+Use `@effect/ai-openai-compat` for language generation and `@effect/ai-typesafe`
+for decisions. OpenCode Go rejects requests without a stable
+`x-opencode-session` header, so add one in the client transform.
+
+```ts
+import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai-compat"
+import { TypeSafeClient, TypeSafeDecisionModel } from "@effect/ai-typesafe"
+import { randomUUID } from "node:crypto"
+import { Config, Layer, Option, Schema as S } from "effect"
+import { HttpClient, HttpClientRequest } from "effect/http"
+import type { TraitsConfig } from "traits"
+
+const sessionId = randomUUID()
+
+const layerTypeSafe = TypeSafeClient.layerConfig({
+  apiKey: Config.Redacted("TYPESAFE_API_KEY")
+})
+
+const layerOpenCode = OpenAiClient.layerConfig({
+  apiKey: Config.Redacted("OPENCODE_API_KEY"),
+  apiUrl: Config.succeed("https://opencode.ai/inference/go/openai/v1"),
+  transformClient: HttpClient.mapRequest((request) => {
+    const withHeaders = request.pipe(
+      HttpClientRequest.setHeader("x-opencode-session", sessionId),
+      HttpClientRequest.setHeader("user-agent", "traits")
+    )
+    const body = withHeaders.body
+    if (body._tag !== "Uint8Array" || body.text === undefined)
+      return withHeaders
+    const payload = Option.getOrUndefined(
+      S.decodeOption(S.fromJsonString(S.Record(S.String, S.Unknown)))(body.text)
+    )
+    if (payload === undefined) return withHeaders
+    const format = Option.getOrUndefined(
+      S.decodeUnknownOption(
+        S.Struct({
+          type: S.Literal("json_schema"),
+          json_schema: S.Struct({ schema: S.Unknown })
+        })
+      )(payload.response_format)
+    )
+    if (format === undefined) return withHeaders
+    const messages = Option.getOrElse(
+      S.decodeUnknownOption(S.Array(S.Record(S.String, S.Unknown)))(
+        payload.messages
+      ),
+      () => []
+    )
+    return HttpClientRequest.bodyJsonUnsafe(withHeaders, {
+      ...payload,
+      response_format: { type: "json_object" },
+      messages: [
+        ...messages,
+        {
+          role: "system",
+          content: `Respond with only a JSON object matching this JSON Schema:\n${JSON.stringify(format.json_schema.schema)}`
+        }
+      ]
+    })
+  })
+})
+
+export default {
+  layerDecisionModel: TypeSafeDecisionModel.layer({
+    model: "jev-latest"
+  }).pipe(Layer.provide(layerTypeSafe)),
+  layerLanguageModel: OpenAiLanguageModel.layer({
+    model: "deepseek-v4.1-flash"
+  }).pipe(Layer.provide(layerOpenCode))
+} satisfies TraitsConfig
+```
+
+Not every OpenCode Go model accepts `response_format` with a `json_schema`.
+`deepseek-v4.1-flash` rejects it, so the transform downgrades structured
+requests to `json_object` and appends the JSON Schema to the prompt. A model
+such as `deepseek-v4-pro` accepts `json_schema` directly, so it can keep only
+the header part of the transform. Verify structured output on the chosen model
+before relying on it.
+
 **Advanced: separate providers.** Users who already hold provider keys or want
 direct provider access can use `@effect/ai-typesafe` for decisions and
-`@effect/ai-openai` for language generation, or other Effect providers. Consult
-current Effect provider documentation and check that each choice supplies the
-required `DecisionModel` or `LanguageModel` service.
+`@effect/ai-openai` or `@effect/ai-openai-compat` for language generation,
+depending on whether the endpoint implements the Responses or chat completions
+API. Other Effect providers also work. Consult current Effect provider
+documentation and check that each choice supplies the required `DecisionModel`
+or `LanguageModel` service.
 
 ### 3. Configure the current checkout
 
@@ -94,11 +198,11 @@ Git filter unless the user requests otherwise.
 ### 4. Keep credentials private
 
 Explain which credentials the selected providers require. The OpenRouter default
-uses `OPENROUTER_API_KEY`; the separate TypeSafe and OpenAI providers use
-`TYPESAFE_API_KEY` and `OPENAI_API_KEY`. Use the MCP process environment or a
-Git-ignored `.env` at the checkout root. Check that the file is ignored before
-writing secrets; never request secret values in chat, print them, or commit
-them.
+uses `OPENROUTER_API_KEY`; the separate TypeSafe, OpenAI, and OpenCode Go
+providers use `TYPESAFE_API_KEY`, `OPENAI_API_KEY`, and `OPENCODE_API_KEY`. Use
+the MCP process environment or a Git-ignored `.env` at the checkout root. Check
+that the file is ignored before writing secrets; never request secret values in
+chat, print them, or commit them.
 
 Process environment values take precedence, followed by the worktree's `.env`,
 then the main checkout's `.env`. Reconnect the server after changing
@@ -136,7 +240,10 @@ user. Its installation is a snapshot; rerun after updating Traits.
 Merge a local Traits MCP server into the selected agents' existing settings,
 preserving other servers. Consult the agent's current configuration format. Use
 the project's package runner to launch the installed Traits CLI, with this
-checkout root as the working directory. For npm, the command is `npx -y traits`.
+checkout root as the working directory. The package-manager-independent command
+is `node node_modules/traits/bin.js`; `pnpm exec traits`, `npm exec traits`, and
+`yarn traits` also work. For a source checkout that is not installed as a
+dependency, run `node <checkout>/traits/bin.js`.
 
 Verify config imports and provider compatibility. When credentials are
 available, connect the server and confirm `derive_trait` and `check_traits` are
@@ -222,3 +329,9 @@ Use a model and route that support structured output. Traits also explicitly
 describes the required JSON shape in its generation prompts, but provider-side
 enforcement remains preferable. No changes to the decision-model configuration
 are required for this setting.
+
+When using `@effect/ai-openai-compat`, confirm that the endpoint accepts
+`response_format` with a `json_schema`. OpenCode Go returns a 400 for
+`deepseek-v4.1-flash`, which requires the `json_object` transform described in
+the provider setup; other models accept `json_schema` directly. A missing
+`x-opencode-session` header also produces a 400 before generation starts.
