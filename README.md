@@ -29,11 +29,16 @@ The server is one Rust binary. It installs nothing into your project.
 ## Install
 
 ```sh
-cargo install --path .
+brew install saiashirwad/tap/traits
 ```
 
-Until the crate is published, install from a clone. The binary lands in
-`~/.cargo/bin/traits`.
+Without Homebrew, use the installer from the latest release:
+
+```sh
+curl -LsSf https://github.com/saiashirwad/traits/releases/latest/download/traits-installer.sh | sh
+```
+
+From a clone, run `cargo install --path .`.
 
 ## Set up a repository
 

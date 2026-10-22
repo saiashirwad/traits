@@ -8,17 +8,23 @@ consumer's Git checkout.
 Install once per machine:
 
 ```sh
-cargo install --path .
+brew install saiashirwad/tap/traits
+```
+
+Without Homebrew:
+
+```sh
+curl -LsSf https://github.com/saiashirwad/traits/releases/latest/download/traits-installer.sh | sh
 ```
 
 From a clone instead:
 
 ```sh
-git clone https://github.com/crosshatch/traits ~/.cache/traits
+git clone https://github.com/saiashirwad/traits ~/.cache/traits
 cargo install --path ~/.cache/traits
 ```
 
-The binary lands in `~/.cargo/bin/traits`. Confirm it with `traits --version`.
+Confirm it with `traits --version`.
 The project itself needs no Node, npm, or package installs.
 
 ## 2. Ask about providers and models
