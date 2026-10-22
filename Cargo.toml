@@ -4,7 +4,8 @@ version = "0.1.0"
 edition = "2024"
 license = "Apache-2.0"
 description = "Reusable preferences for your AI agent"
-repository = "https://github.com/crosshatch/traits"
+repository = "https://github.com/saiashirwad/traits"
+homepage = "https://github.com/saiashirwad/traits"
 exclude = ["/.agents", "/.github"]
 
 [[bin]]
@@ -49,3 +50,8 @@ wiremock = "0.6"
 strip = true
 lto = "thin"
 codegen-units = 1
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"
