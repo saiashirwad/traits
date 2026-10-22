@@ -1,0 +1,1205 @@
+#!/usr/bin/env python3
+"""Deterministic verification harness for the Traits CLI and MCP server.
+
+This is an opt-in verification tool, not a unit-test suite. It uses a local
+mock provider only for deterministic protocol, CLI, config, store, and failure
+handling; it makes no claim about model quality. Model-dependent behavior
+requires a separate opt-in real-provider check.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+import uuid
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from typing import Any
+
+SCRIPT = Path(__file__).resolve()
+REPO_ROOT = SCRIPT.parents[3]
+DEFAULT_BIN = REPO_ROOT / "target" / "debug" / "traits"
+TMP_ROOT = Path(tempfile.gettempdir()) / "traits-verify"
+ARTIFACT_ROOT = REPO_ROOT / "artifacts" / "verify-traits"
+MOCK_KEY = "verify-key"
+REAL_KEY_ENV = (
+    "TYPESAFE_API_KEY",
+    "OPENCODE_API_KEY",
+    "DEEPSEEK_API_KEY",
+    "OPENROUTER_API_KEY",
+    "OPENAI_API_KEY",
+    "TRAITS_API_KEY",
+)
+CONFIG_TEMPLATE = """version 1
+concurrency 2
+
+provider "mock" {
+    kind "custom"
+    model "verify-model"
+    base-url "__URL__"
+    api-key-env "MOCK_API_KEY"
+    json-mode "prompt"
+}
+
+default-provider "mock"
+exclude-gitignored #false
+__CACHE__
+"""
+FEATURES = ("setup", "store", "check", "mcp-check", "mcp-derive")
+
+
+def traits_bin() -> Path:
+    override = os.environ.get("TRAITS_BIN")
+    return Path(override).expanduser().resolve() if override else DEFAULT_BIN
+
+
+def default_run_id() -> str:
+    return time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6]
+
+
+def safe_run_id(value: str) -> str:
+    if not re.fullmatch(r"[A-Za-z0-9._-]+", value):
+        raise SystemExit(f"Invalid run id {value!r}; use letters, digits, dot, underscore, or dash")
+    return value
+
+
+def base_env() -> dict[str, str]:
+    env = os.environ.copy()
+    env["NO_COLOR"] = "1"
+    env["RUST_LOG"] = "warn"
+    for key in REAL_KEY_ENV:
+        env.pop(key, None)
+    env.pop("TRAITS_CONFIG", None)
+    return env
+
+
+def fixture_env(fixture: Path, with_key: bool = True) -> dict[str, str]:
+    env = base_env()
+    home = fixture / "home"
+    env["HOME"] = str(home)
+    env["XDG_CONFIG_HOME"] = str(home / ".config")
+    env["XDG_CACHE_HOME"] = str(home / ".cache")
+    if with_key:
+        env["MOCK_API_KEY"] = MOCK_KEY
+    return env
+
+
+def new_fixture(run_id: str, name: str) -> Path:
+    path = TMP_ROOT / run_id / name
+    if path.exists():
+        shutil.rmtree(path)
+    path.mkdir(parents=True)
+    (path / "home").mkdir()
+    subprocess.run(
+        ["git", "init", "--quiet"],
+        cwd=path,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return path
+
+
+def write_config(fixture: Path, base_url: str, cache: bool = False) -> None:
+    text = CONFIG_TEMPLATE.replace("__URL__", base_url).replace(
+        "__CACHE__", "cache" if cache else "cache #false"
+    )
+    (fixture / "traits.kdl").write_text(text, encoding="utf-8")
+
+
+def write_trait(
+    fixture: Path,
+    name: str,
+    subject: str,
+    requirement: str,
+    purpose: str,
+    *,
+    paths: list[str] | None = None,
+    applicability: str | None = None,
+    guidance: str | None = None,
+    context: str | None = None,
+) -> Path:
+    lines = ["---", f"name: {name}", f"subject: {subject}", f"requirement: {requirement}"]
+    if applicability:
+        lines.append(f"applicability: {applicability}")
+    if paths:
+        lines.append("paths:")
+        lines.extend(f'  - "{pattern}"' for pattern in paths)
+    lines.append(f"purpose: {purpose}")
+    if guidance:
+        lines.append(f"guidance: {guidance}")
+    lines.append("---")
+    body = context or ""
+    if body and not body.endswith("\n"):
+        body += "\n"
+    target = fixture / ".agents" / "traits" / f"{name}.md"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("\n".join(lines) + "\n" + body, encoding="utf-8")
+    return target
+
+
+def write_file(fixture: Path, name: str, text: str) -> Path:
+    target = fixture / name
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(text, encoding="utf-8")
+    return target
+
+
+def cargo_version() -> str:
+    text = (REPO_ROOT / "Cargo.toml").read_text(encoding="utf-8")
+    match = re.search(r'^version = "([^"]+)"', text, re.MULTILINE)
+    return match.group(1) if match else "unknown"
+
+
+class MockProvider:
+    """Local OpenAI-compatible provider with deterministic answers.
+
+    This is a protocol and failure-handling fixture, not a model-quality
+    oracle. It returns predetermined classifications so the CLI and MCP
+    plumbing can be verified without a real provider.
+    """
+
+    def __init__(self) -> None:
+        self.requests: list[dict[str, Any]] = []
+        self.lock = threading.Lock()
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), self._handler())
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+
+    @property
+    def url(self) -> str:
+        host, port = self.server.server_address[:2]
+        return f"http://{host}:{port}"
+
+    def start(self) -> "MockProvider":
+        self.thread.start()
+        return self
+
+    def stop(self) -> None:
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(timeout=2)
+
+    def __enter__(self) -> "MockProvider":
+        return self.start()
+
+    def __exit__(self, _exc_type: object, _exc: object, _tb: object) -> None:
+        self.stop()
+
+    def reset(self) -> None:
+        with self.lock:
+            self.requests.clear()
+
+    def count(self) -> int:
+        with self.lock:
+            return len(self.requests)
+
+    def _handler(self) -> type[BaseHTTPRequestHandler]:
+        provider = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self) -> None:
+                if self.path != "/health":
+                    self.send_error(404)
+                    return
+                provider._send_json(self, {"status": "ok", "requests": provider.count()})
+
+            def do_POST(self) -> None:
+                if self.path != "/chat/completions":
+                    self.send_error(404)
+                    return
+                length = int(self.headers.get("Content-Length", "0"))
+                raw = self.rfile.read(length) if length else b"{}"
+                try:
+                    body = json.loads(raw)
+                except json.JSONDecodeError:
+                    self.send_error(400)
+                    return
+                with provider.lock:
+                    provider.requests.append(body)
+                provider._send_json(self, provider.respond(body))
+
+            def log_message(self, _format: str, *args: Any) -> None:
+                del args
+
+        return Handler
+
+    @staticmethod
+    def _send_json(handler: BaseHTTPRequestHandler, payload: dict[str, Any]) -> None:
+        data = json.dumps(payload).encode("utf-8")
+        handler.send_response(200)
+        handler.send_header("Content-Type", "application/json")
+        handler.send_header("Content-Length", str(len(data)))
+        handler.end_headers()
+        handler.wfile.write(data)
+
+    def respond(self, body: dict[str, Any]) -> dict[str, Any]:
+        messages = body.get("messages", [])
+        system = str(messages[0].get("content", "")) if messages else ""
+        if system.startswith("You are a decision model."):
+            user = json.loads(messages[1]["content"])
+            state = user.get("state")
+            questions = user.get("questions", [])
+            answers = [self.answer(question, state) for question in questions]
+            content = json.dumps({"answers": answers})
+            return {
+                "choices": [{"message": {"content": content}}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+            }
+        if "Reply with JSON only." in system:
+            content = json.dumps({"ok": True})
+        else:
+            content = json.dumps({"traits": []})
+        return {"choices": [{"message": {"content": content}}]}
+
+    def answer(self, question: dict[str, Any], state: Any) -> dict[str, Any]:
+        labels = list(question.get("criteria", {}))
+        if not labels:
+            raise RuntimeError(f"question {question.get('id')} has no criteria")
+        source = ""
+        if isinstance(state, dict) and isinstance(state.get("source"), dict):
+            source = str(state["source"].get("text", ""))
+        state_text = json.dumps(state, ensure_ascii=False)
+        question_id = str(question.get("id", ""))
+        if "distinct" in labels:
+            label = "distinct"
+        elif "atomic" in labels:
+            label = "atomic"
+        elif "complete" in labels:
+            label = "complete"
+        elif "violation" in labels:
+            if question_id == "no-var":
+                label = "violation" if re.search(r"\bvar\b", source) else "compliant"
+            else:
+                label = "violation" if re.search(r"\b(let|var)\b", source) else "compliant"
+        elif "yes" in labels and "no" in labels:
+            label = "yes" if "ping" in state_text else "no"
+        else:
+            label = labels[0]
+        probabilities = {name: 0.0 for name in labels}
+        probabilities[label] = 1.0
+        return {"id": question_id, "label": label, "probabilities": probabilities}
+
+
+class Run:
+    def __init__(self, run_id: str, feature: str) -> None:
+        self.run_id = run_id
+        self.feature = feature
+        self.dir = ARTIFACT_ROOT / run_id / feature
+        self.dir.mkdir(parents=True, exist_ok=True)
+        self.transcript_path = self.dir / "transcript.jsonl"
+        self.transcript = self.transcript_path.open("w", encoding="utf-8")
+        self.checks: list[dict[str, Any]] = []
+        self.failures: list[dict[str, str]] = []
+
+    def note(self, kind: str, **data: Any) -> None:
+        self.transcript.write(json.dumps({"kind": kind, **data}, ensure_ascii=False) + "\n")
+        self.transcript.flush()
+
+    def check(self, label: str, ok: bool, detail: str = "") -> bool:
+        ok = bool(ok)
+        entry = {"check": label, "ok": ok, "detail": detail}
+        self.checks.append(entry)
+        self.note("check", **entry)
+        if not ok:
+            self.failures.append({"check": label, "detail": detail})
+        return ok
+
+    def command(
+        self,
+        argv: list[str | Path],
+        cwd: Path,
+        env: dict[str, str],
+        timeout: int = 60,
+    ) -> dict[str, Any]:
+        started = time.time()
+        try:
+            result = subprocess.run(
+                [str(value) for value in argv],
+                cwd=str(cwd),
+                env=env,
+                text=True,
+                capture_output=True,
+                timeout=timeout,
+            )
+            code, stdout, stderr = result.returncode, result.stdout, result.stderr
+        except subprocess.TimeoutExpired as error:
+            code = 124
+            stdout = error.stdout if isinstance(error.stdout, str) else ""
+            stderr = error.stderr if isinstance(error.stderr, str) else ""
+        record = {
+            "argv": [str(value) for value in argv],
+            "cwd": str(cwd),
+            "exitCode": code,
+            "stdout": stdout,
+            "stderr": stderr,
+            "seconds": round(time.time() - started, 3),
+        }
+        self.note("command", **record)
+        return record
+
+    def save_file(self, source: Path, name: str) -> None:
+        target = self.dir / "fixtures" / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if source.is_dir():
+            shutil.copytree(source, target, dirs_exist_ok=True)
+        else:
+            shutil.copy2(source, target)
+
+    def write_json(self, name: str, data: Any) -> None:
+        target = self.dir / name
+        target.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+    def close(self) -> dict[str, Any]:
+        self.transcript.close()
+        summary = {
+            "feature": self.feature,
+            "runId": self.run_id,
+            "ok": not self.failures,
+            "checks": self.checks,
+            "failures": self.failures,
+            "artifacts": str(self.dir),
+        }
+        self.write_json("summary.json", summary)
+        return summary
+
+
+class McpClient:
+    def __init__(self, cwd: Path, env: dict[str, str]) -> None:
+        self.cwd = cwd
+        self.proc = subprocess.Popen(
+            [str(traits_bin())],
+            cwd=str(cwd),
+            env=env,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+        )
+        self.next_id = 1
+        self.transcript: list[dict[str, Any]] = []
+        self.stderr_lines: list[str] = []
+        threading.Thread(target=self._drain_stderr, daemon=True).start()
+
+    def _drain_stderr(self) -> None:
+        assert self.proc.stderr is not None
+        try:
+            for line in self.proc.stderr:
+                self.stderr_lines.append(line.rstrip("\n"))
+        except ValueError:
+            pass
+
+    def _send(self, message: dict[str, Any]) -> None:
+        assert self.proc.stdin is not None
+        self.proc.stdin.write(json.dumps(message) + "\n")
+        self.proc.stdin.flush()
+        self.transcript.append({"direction": "out", "message": message})
+
+    def request(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
+        request_id = self.next_id
+        self.next_id += 1
+        self._send(
+            {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "method": method,
+                "params": params,
+            }
+        )
+        assert self.proc.stdout is not None
+        while True:
+            line = self.proc.stdout.readline()
+            if not line:
+                raise RuntimeError(
+                    f"MCP server closed stdout while waiting for {method}; "
+                    f"stderr: {' | '.join(self.stderr_lines[-5:])}"
+                )
+            message = json.loads(line)
+            self.transcript.append({"direction": "in", "message": message})
+            if message.get("id") == request_id:
+                if "error" in message:
+                    raise RuntimeError(f"{method} failed: {message['error']}")
+                return message.get("result", {})
+    def notify(self, method: str, params: dict[str, Any]) -> None:
+        self._send({"jsonrpc": "2.0", "method": method, "params": params})
+
+    def initialize(self) -> dict[str, Any]:
+        result = self.request(
+            "initialize",
+            {
+                "protocolVersion": "2025-11-25",
+                "capabilities": {},
+                "clientInfo": {"name": "verify-traits", "version": "0"},
+            },
+        )
+        self.notify("notifications/initialized", {})
+        return result
+
+    def call(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        result = self.request("tools/call", {"name": name, "arguments": arguments})
+        content = result.get("content", [])
+        text = str(content[0].get("text", "")) if content else ""
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError:
+            parsed = text
+        return {
+            "isError": bool(result.get("isError", False)),
+            "result": parsed,
+            "text": text,
+            "raw": result,
+        }
+
+    def stop(self) -> int:
+        if self.proc.stdin is not None:
+            try:
+                self.proc.stdin.close()
+            except OSError:
+                pass
+        try:
+            self.proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            self.proc.terminate()
+            try:
+                self.proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self.proc.kill()
+                self.proc.wait(timeout=5)
+        for stream in (self.proc.stdout, self.proc.stderr):
+            if stream is not None:
+                try:
+                    stream.close()
+                except OSError:
+                    pass
+        return self.proc.returncode if self.proc.returncode is not None else 1
+
+    def save(self, path: Path) -> None:
+        path.write_text(
+            "\n".join(json.dumps(entry, ensure_ascii=False) for entry in self.transcript) + "\n",
+            encoding="utf-8",
+        )
+        if self.stderr_lines:
+            path.with_suffix(".stderr.txt").write_text(
+                "\n".join(self.stderr_lines) + "\n", encoding="utf-8"
+            )
+
+
+def feature_setup(run: Run, mock: MockProvider) -> None:
+    fixture = new_fixture(run.run_id, "setup")
+    try:
+        env = fixture_env(fixture)
+        init = run.command([traits_bin(), "init"], fixture, env)
+        run.check("init exits 0", init["exitCode"] == 0, init["stderr"])
+        run.check("init writes traits.kdl", (fixture / "traits.kdl").is_file())
+        run.check("init creates the store", (fixture / ".agents" / "traits").is_dir())
+        run.check("init prints the store path", "Store:" in init["stdout"], init["stdout"])
+
+        again = run.command([traits_bin(), "init"], fixture, env)
+        run.check(
+            "second init refuses to overwrite",
+            again["exitCode"] == 1 and "already exists; pass --force" in again["stderr"],
+            again["stderr"],
+        )
+        forced = run.command([traits_bin(), "init", "--force"], fixture, env)
+        run.check("init --force exits 0", forced["exitCode"] == 0, forced["stderr"])
+
+        write_config(fixture, mock.url)
+        without_key = run.command(
+            [traits_bin(), "config", "check"], fixture, fixture_env(fixture, with_key=False)
+        )
+        run.check(
+            "config check warns about the missing key",
+            without_key["exitCode"] == 0
+            and "warning: MOCK_API_KEY is not set" in without_key["stdout"],
+            without_key["stdout"],
+        )
+        run.check("config check without --live sends no request", mock.count() == 0)
+
+        with_key = run.command([traits_bin(), "config", "check"], fixture, env)
+        run.check(
+            "config check prints the resolved provider",
+            "provider mock: kind=Custom model=verify-model" in with_key["stdout"],
+            with_key["stdout"],
+        )
+        run.check("config check with a key omits the warning", "warning:" not in with_key["stdout"])
+
+        mock.reset()
+        live = run.command(
+            [traits_bin(), "config", "check", "--live"], fixture, env, timeout=30
+        )
+        run.check(
+            "live config check exits 0",
+            live["exitCode"] == 0,
+            live["stdout"] + live["stderr"],
+        )
+        run.check(
+            "live config check pings classify",
+            "classify mock (verify-model): ok in" in live["stdout"],
+            live["stdout"],
+        )
+        run.check(
+            "live config check pings generate",
+            "generate mock (verify-model): ok in" in live["stdout"],
+            live["stdout"],
+        )
+        run.check("live config check makes two requests", mock.count() == 2, str(mock.count()))
+        run.check("live config check reports no failure", "failed:" not in live["stdout"])
+
+        run.save_file(fixture / "traits.kdl", "traits.kdl")
+        run.write_json(
+            "setup.json",
+            {
+                "init": init,
+                "secondInit": again,
+                "forcedInit": forced,
+                "configWithoutKey": without_key,
+                "configWithKey": with_key,
+                "configLive": live,
+            },
+        )
+    finally:
+        shutil.rmtree(fixture, ignore_errors=True)
+
+
+def feature_store(run: Run, _mock: MockProvider) -> None:
+    fixture = new_fixture(run.run_id, "store")
+    try:
+        write_config(fixture, "http://127.0.0.1:1")
+        use_const = write_trait(
+            fixture,
+            "use-const",
+            "Binding declarations.",
+            "Prefer const declarations.",
+            "Make immutable bindings explicit.",
+        )
+        no_var = write_trait(
+            fixture,
+            "no-var",
+            "Variable declarations.",
+            "Avoid var declarations.",
+            "Keep declarations block scoped.",
+        )
+        env = fixture_env(fixture)
+
+        listed = run.command([traits_bin(), "trait", "ls"], fixture, env)
+        names = [line.split(" \u2014 ")[0] for line in listed["stdout"].splitlines()]
+        run.check("trait ls exits 0", listed["exitCode"] == 0, listed["stderr"])
+        run.check("trait ls is sorted by name", names == ["no-var", "use-const"], str(names))
+
+        shown = run.command([traits_bin(), "trait", "show", "use-const"], fixture, env)
+        run.check("trait show exits 0", shown["exitCode"] == 0, shown["stderr"])
+        run.check("trait show prints canonical frontmatter", "name: use-const" in shown["stdout"])
+        run.check(
+            "trait show includes the requirement",
+            "requirement: Prefer const declarations." in shown["stdout"],
+            shown["stdout"],
+        )
+
+        missing = run.command([traits_bin(), "trait", "show", "missing"], fixture, env)
+        run.check(
+            "showing a missing trait exits 1",
+            missing["exitCode"] == 1 and "Trait missing was not found" in missing["stderr"],
+            missing["stderr"],
+        )
+
+        broken = fixture / ".agents" / "traits" / "broken.md"
+        broken.write_text("not frontmatter\n", encoding="utf-8")
+        parse_failure = run.command([traits_bin(), "trait", "ls"], fixture, env)
+        run.check(
+            "a malformed trait fails the listing",
+            parse_failure["exitCode"] == 1
+            and "Unable to parse trait" in parse_failure["stderr"],
+            parse_failure["stderr"],
+        )
+        broken.unlink()
+
+        wrong = fixture / ".agents" / "traits" / "wrong.md"
+        wrong.write_text(
+            "---\nname: right-name\nsubject: Subject.\nrequirement: Requirement.\npurpose: Purpose.\n---\n",
+            encoding="utf-8",
+        )
+        mismatch = run.command([traits_bin(), "trait", "ls"], fixture, env)
+        run.check(
+            "a filename mismatch fails the listing",
+            mismatch["exitCode"] == 1
+            and "Trait filename must be right-name.md" in mismatch["stderr"],
+            mismatch["stderr"],
+        )
+        wrong.unlink()
+
+        run.save_file(use_const, "use-const.md")
+        run.save_file(no_var, "no-var.md")
+        removed = run.command([traits_bin(), "trait", "rm", "use-const"], fixture, env)
+        run.check("trait rm exits 0", removed["exitCode"] == 0, removed["stderr"])
+        run.check("trait rm removes the file", not (fixture / ".agents" / "traits" / "use-const.md").exists())
+        run.check("trait rm prints the removed name", "Removed use-const" in removed["stdout"])
+
+        after = run.command([traits_bin(), "trait", "ls"], fixture, env)
+        run.check(
+            "trait ls no longer lists the removed trait",
+            "use-const" not in after["stdout"] and "no-var" in after["stdout"],
+            after["stdout"],
+        )
+        gone = run.command([traits_bin(), "trait", "show", "use-const"], fixture, env)
+        run.check(
+            "showing the removed trait exits 1",
+            gone["exitCode"] == 1 and "Trait use-const was not found" in gone["stderr"],
+            gone["stderr"],
+        )
+        run.write_json(
+            "store.json",
+            {
+                "listed": listed,
+                "shown": shown,
+                "removed": removed,
+                "afterRemoval": after,
+            },
+        )
+    finally:
+        shutil.rmtree(fixture, ignore_errors=True)
+
+
+def seed_check_fixture(fixture: Path, base_url: str, cache: bool = False) -> None:
+    write_config(fixture, base_url, cache=cache)
+    write_trait(
+        fixture,
+        "use-const",
+        "Binding declarations.",
+        "Prefer const declarations over let and var.",
+        "Make immutable bindings explicit.",
+        paths=["*.ts"],
+    )
+    write_trait(
+        fixture,
+        "no-var",
+        "Variable declarations.",
+        "Avoid var declarations.",
+        "Keep declarations block scoped.",
+        paths=["*.ts"],
+    )
+    write_file(fixture, "example.ts", "let value = 1\n")
+    write_file(fixture, "good.ts", "const value = 1\n")
+    write_file(fixture, "legacy.ts", "var value = 1\n")
+    write_file(
+        fixture,
+        "ignored.ts",
+        "// traits-ignore-file use-const: legacy module\nlet value = 1\n",
+    )
+    big = [f"const value{index} = {index}" for index in range(1, 201)] + ["let final = 1"]
+    write_file(fixture, "big.ts", "\n".join(big) + "\n")
+
+
+def finding_start_line(stdout: str) -> int | None:
+    match = re.search(r":(\d+)$", stdout.strip().splitlines()[-1]) if stdout.strip() else None
+    return int(match.group(1)) if match else None
+
+
+def feature_check(run: Run, mock: MockProvider) -> None:
+    fixture = new_fixture(run.run_id, "check")
+    try:
+        seed_check_fixture(fixture, mock.url)
+        env = fixture_env(fixture)
+
+        violation = run.command(
+            [traits_bin(), "check", "example.ts", "good.ts"], fixture, env
+        )
+        run.check("check reports a violation with exit 1", violation["exitCode"] == 1, violation["stdout"])
+        run.check(
+            "the violation names use-const and the source line",
+            "violation use-const at " in violation["stdout"] and ":1" in violation["stdout"],
+            violation["stdout"],
+        )
+        run.check("the compliant trait is not reported", "no-var" not in violation["stdout"], violation["stdout"])
+        run.check("check called the mock provider", mock.count() >= 1, str(mock.count()))
+
+        mock.reset()
+        clean = run.command([traits_bin(), "check", "good.ts"], fixture, env)
+        run.check("a compliant file exits 0", clean["exitCode"] == 0, clean["stdout"])
+        run.check("a compliant file prints No findings.", clean["stdout"].strip() == "No findings.", clean["stdout"])
+        run.check("a compliant file is still assessed", mock.count() >= 1, str(mock.count()))
+
+        mock.reset()
+        unmatched = run.command([traits_bin(), "check", "missing.ts"], fixture, env)
+        run.check("an unmatched pattern exits 0", unmatched["exitCode"] == 0, unmatched["stdout"])
+        run.check(
+            "an unmatched pattern prints No findings.",
+            unmatched["stdout"].strip() == "No findings.",
+            unmatched["stdout"],
+        )
+        run.check("an unmatched pattern makes no provider request", mock.count() == 0, str(mock.count()))
+
+        mock.reset()
+        focused = run.command(
+            [traits_bin(), "check", "--trait", "no-var", "legacy.ts"], fixture, env
+        )
+        run.check(
+            "a focused trait reports only that trait",
+            focused["exitCode"] == 1
+            and "violation no-var at " in focused["stdout"]
+            and "use-const" not in focused["stdout"],
+            focused["stdout"],
+        )
+        run.check("a focused trait asks only one question", mock.count() == 1, str(mock.count()))
+
+        as_json = run.command([traits_bin(), "check", "--json", "example.ts"], fixture, env)
+        run.check("JSON check exits 1", as_json["exitCode"] == 1, as_json["stdout"])
+        try:
+            findings = json.loads(as_json["stdout"])
+        except json.JSONDecodeError:
+            findings = []
+        run.check("JSON check returns one finding", len(findings) == 1, as_json["stdout"])
+        if findings:
+            finding = findings[0]
+            run.check("JSON finding names the trait", finding.get("trait", {}).get("name") == "use-const")
+            run.check(
+                "JSON finding classifies the violation",
+                finding.get("assessment", {}).get("classification") == "violation",
+            )
+            run.check(
+                "JSON finding points at line 1",
+                finding.get("source", {}).get("location", {}).get("startLine") == 1,
+            )
+            run.write_json("findings.json", findings)
+
+        mock.reset()
+        ignored = run.command([traits_bin(), "check", "ignored.ts"], fixture, env)
+        run.check(
+            "a trait-ignore-file directive skips the trait",
+            ignored["exitCode"] == 0 and ignored["stdout"].strip() == "No findings.",
+            ignored["stdout"],
+        )
+        run.check(
+            "the ignored file is still assessed for other traits",
+            mock.count() >= 1,
+            str(mock.count()),
+        )
+
+        mock.reset()
+        chunked = run.command([traits_bin(), "check", "big.ts"], fixture, env)
+        run.check("a 201-line file reports the second chunk", chunked["exitCode"] == 1, chunked["stdout"])
+        run.check(
+            "the second chunk starts at line 201",
+            finding_start_line(chunked["stdout"]) == 201,
+            chunked["stdout"],
+        )
+        run.check("the 201-line file needs two chunk requests", mock.count() == 2, str(mock.count()))
+
+        unknown = run.command(
+            [traits_bin(), "check", "--trait", "does-not-exist", "example.ts"], fixture, env
+        )
+        run.check(
+            "an unknown trait fails the run",
+            unknown["exitCode"] == 1
+            and "Trait does-not-exist was not found" in unknown["stderr"],
+            unknown["stderr"],
+        )
+
+        write_config(fixture, mock.url, cache=True)
+        mock.reset()
+        warm = run.command([traits_bin(), "check", "example.ts"], fixture, env)
+        first_requests = mock.count()
+        run.check("the cache-enabled run asks the provider", warm["exitCode"] == 1 and first_requests >= 1, str(first_requests))
+        cache_files = list((fixture / "home").rglob("*.json"))
+        run.check("the answer is written to the fixture cache", bool(cache_files), str(len(cache_files)))
+        mock.reset()
+        cached = run.command([traits_bin(), "check", "example.ts"], fixture, env)
+        run.check("a repeat run makes no provider request", mock.count() == 0, str(mock.count()))
+        run.check("a repeat run returns the same finding", cached["stdout"] == warm["stdout"], cached["stdout"])
+
+        mock.reset()
+        forced_again = run.command([traits_bin(), "check", "--no-cache", "example.ts"], fixture, env)
+        run.check("--no-cache bypasses the cache", forced_again["exitCode"] == 1 and mock.count() >= 1, str(mock.count()))
+
+        mock.reset()
+        circumstances = run.command(
+            [traits_bin(), "check", "--circumstances", "after a refactor", "example.ts"],
+            fixture,
+            env,
+        )
+        run.check("changing circumstances asks again", circumstances["exitCode"] == 1 and mock.count() >= 1, str(mock.count()))
+        mock.reset()
+        repeated = run.command(
+            [traits_bin(), "check", "--circumstances", "after a refactor", "example.ts"],
+            fixture,
+            env,
+        )
+        run.check("repeating the same circumstances uses the cache", repeated["exitCode"] == 1 and mock.count() == 0, str(mock.count()))
+
+        run.save_file(fixture / "example.ts", "example.ts")
+        run.save_file(fixture / "big.ts", "big.ts")
+        run.save_file(fixture / "traits.kdl", "traits.kdl")
+        run.write_json(
+            "check.json",
+            {
+                "violation": violation,
+                "clean": clean,
+                "unmatched": unmatched,
+                "focused": focused,
+                "json": as_json,
+                "ignored": ignored,
+                "chunked": chunked,
+                "unknown": unknown,
+                "warm": warm,
+                "cached": cached,
+                "forcedAgain": forced_again,
+                "circumstances": circumstances,
+                "repeated": repeated,
+            },
+        )
+    finally:
+        shutil.rmtree(fixture, ignore_errors=True)
+
+
+def feature_mcp_check(run: Run, mock: MockProvider) -> None:
+    fixture = new_fixture(run.run_id, "mcp-check")
+    broken = new_fixture(run.run_id, "mcp-check-broken")
+    client: McpClient | None = None
+    broken_client: McpClient | None = None
+    try:
+        seed_check_fixture(fixture, mock.url)
+        env = fixture_env(fixture)
+        client = McpClient(fixture, env)
+        init = client.initialize()
+        run.check("MCP initialize names the traits server", init.get("serverInfo", {}).get("name") == "traits", json.dumps(init))
+        run.check(
+            "MCP initialize includes instructions",
+            "Traits" in str(init.get("instructions", "")),
+            str(init.get("instructions", ""))[:200],
+        )
+        tools = client.request("tools/list", {})
+        names = [tool.get("name") for tool in tools.get("tools", [])]
+        run.check("MCP exposes exactly two tools", names == ["derive_trait", "check_traits"], str(names))
+
+        findings = client.call(
+            "check_traits", {"include": ["example.ts", "good.ts"]}
+        )
+        run.check("MCP check_traits succeeds", not findings["isError"], findings["text"])
+        result = findings["result"] if isinstance(findings["result"], list) else []
+        run.check("MCP check_traits returns one finding", len(result) == 1, json.dumps(result))
+        if result:
+            run.check("MCP finding names use-const", result[0].get("trait", {}).get("name") == "use-const")
+            run.check(
+                "MCP finding points at line 1",
+                result[0].get("source", {}).get("location", {}).get("startLine") == 1,
+            )
+            run.write_json("findings.json", result)
+
+        empty = client.call("check_traits", {"include": []})
+        run.check("MCP empty include returns []", not empty["isError"] and empty["result"] == [], empty["text"])
+
+        ignored = client.call("check_traits", {"include": ["ignored.ts"]})
+        run.check("MCP ignore directive returns []", not ignored["isError"] and ignored["result"] == [], ignored["text"])
+
+        missing = client.call(
+            "check_traits", {"include": ["example.ts"], "traitNames": ["does-not-exist"]}
+        )
+        run.check(
+            "MCP unknown trait is an error",
+            missing["isError"] and "TraitNotFoundError" in missing["text"],
+            missing["text"],
+        )
+        client.save(run.dir / "mcp-check.jsonl")
+        exit_code = client.stop()
+        client = None
+        run.check("MCP server exits cleanly", exit_code == 0, str(exit_code))
+
+        (broken / ".agents" / "traits").mkdir(parents=True)
+        (broken / "traits.kdl").write_text(
+            'provider "broken" {\n    kind "custom"\n    model "m"\n}\n',
+            encoding="utf-8",
+        )
+        broken_client = McpClient(broken, fixture_env(broken, with_key=False))
+        broken_init = broken_client.initialize()
+        run.check(
+            "MCP starts even when configuration fails",
+            broken_init.get("serverInfo", {}).get("name") == "traits",
+            json.dumps(broken_init),
+        )
+        broken_tools = broken_client.request("tools/list", {})
+        run.check(
+            "a broken configuration still lists both tools",
+            len(broken_tools.get("tools", [])) == 2,
+            json.dumps(broken_tools),
+        )
+        diagnostic = broken_client.call("check_traits", {"include": []})
+        run.check(
+            "a broken configuration returns a diagnostic",
+            diagnostic["isError"] and "base-url" in diagnostic["text"],
+            diagnostic["text"],
+        )
+        broken_client.save(run.dir / "mcp-check-broken.jsonl")
+        broken_exit = broken_client.stop()
+        broken_client = None
+        run.check("the broken-config server exits cleanly", broken_exit == 0, str(broken_exit))
+    finally:
+        if client is not None:
+            client.stop()
+        if broken_client is not None:
+            broken_client.stop()
+        shutil.rmtree(fixture, ignore_errors=True)
+        shutil.rmtree(broken, ignore_errors=True)
+
+
+def feature_mcp_derive(run: Run, mock: MockProvider) -> None:
+    fixture = new_fixture(run.run_id, "mcp-derive")
+    client: McpClient | None = None
+    try:
+        write_config(fixture, mock.url)
+        (fixture / ".agents" / "traits").mkdir(parents=True)
+        env = fixture_env(fixture)
+        proposal = {
+            "name": "prefer-const",
+            "subject": "Binding declarations.",
+            "requirement": "Prefer const declarations over let and var.",
+            "applicability": "TypeScript and Rust source files.",
+            "paths": ["*.ts", "*.rs"],
+            "purpose": "Make immutable bindings explicit.",
+            "guidance": "Use const when the binding is never reassigned.",
+            "context": "BAD:\n```ts\nlet value = 1\n```\n\nGOOD:\n```ts\nconst value = 1\n```\n",
+        }
+        client = McpClient(fixture, env)
+        client.initialize()
+        pending = client.call("derive_trait", {"proposedTrait": proposal})
+        run.check("derive without approval does not write", not pending["isError"] and not (fixture / ".agents" / "traits" / "prefer-const.md").exists(), pending["text"])
+        run.check(
+            "derive without approval asks for approval",
+            pending["result"].get("_tag") == "ApprovalRequired"
+            and "Save trait prefer-const?" in pending["result"].get("message", ""),
+            pending["text"],
+        )
+
+        created = client.call("derive_trait", {"proposedTrait": proposal, "approved": True})
+        run.check("deriving with approval succeeds", not created["isError"], created["text"])
+        run.check("deriving returns Created", created["result"].get("_tag") == "Created", created["text"])
+        run.check(
+            "deriving returns the saved trait",
+            created["result"].get("trait", {}).get("name") == "prefer-const",
+            created["text"],
+        )
+        run.check(
+            "deriving requires the post-save check",
+            "Required post-save trait checks" in created["result"].get("instructions", ""),
+            created["text"],
+        )
+        saved = fixture / ".agents" / "traits" / "prefer-const.md"
+        run.check("deriving writes the trait file", saved.is_file())
+        saved_text = saved.read_text(encoding="utf-8") if saved.exists() else ""
+        run.check("the saved file has frontmatter", saved_text.startswith("---\nname: prefer-const"))
+        run.check("the saved file keeps paths", '  - "*.ts"\n  - "*.rs"' in saved_text, saved_text)
+        run.check("the saved file keeps context", "BAD:" in saved_text and "GOOD:" in saved_text, saved_text)
+
+        duplicate = client.call("derive_trait", {"proposedTrait": proposal, "approved": True})
+        run.check(
+            "a duplicate name is an error",
+            duplicate["isError"] and "TraitAlreadyExistsError" in duplicate["text"],
+            duplicate["text"],
+        )
+        invalid = client.call(
+            "derive_trait",
+            {"proposedTrait": {"name": "missing-purpose", "subject": "S.", "requirement": "R."}},
+        )
+        run.check(
+            "an invalid proposal is an error",
+            invalid["isError"] and "Invalid proposedTrait" in invalid["text"],
+            invalid["text"],
+        )
+        run.check("an invalid proposal writes nothing", not (fixture / ".agents" / "traits" / "missing-purpose.md").exists())
+        client.save(run.dir / "mcp-derive.jsonl")
+        exit_code = client.stop()
+        client = None
+        run.check("the derive server exits cleanly", exit_code == 0, str(exit_code))
+
+        second_view = run.command([traits_bin(), "trait", "show", "prefer-const"], fixture, env)
+        run.check("the CLI sees the MCP-created trait", second_view["exitCode"] == 0, second_view["stderr"])
+        run.check("the CLI shows the saved context", "BAD:" in second_view["stdout"] and "GOOD:" in second_view["stdout"], second_view["stdout"])
+        run.save_file(saved, "prefer-const.md")
+        run.write_json(
+            "derive.json",
+            {
+                "pending": pending,
+                "created": created,
+                "duplicate": duplicate,
+                "invalid": invalid,
+                "secondView": second_view,
+            },
+        )
+    finally:
+        if client is not None:
+            client.stop()
+        shutil.rmtree(fixture, ignore_errors=True)
+
+
+def feature_doctor(run: Run, mock: MockProvider) -> None:
+    binary = traits_bin()
+    run.check("the traits binary exists", binary.is_file(), str(binary))
+    run.check("the traits binary is executable", binary.is_file() and os.access(binary, os.X_OK), str(binary))
+    if binary.is_file():
+        version = run.command([binary, "--version"], REPO_ROOT, base_env())
+        expected = f"traits {cargo_version()}"
+        run.check("the binary reports the crate version", version["stdout"].strip() == expected, version["stdout"].strip())
+        sources = [REPO_ROOT / "Cargo.toml", *list((REPO_ROOT / "src").rglob("*.rs"))]
+        newest = max(path.stat().st_mtime for path in sources if path.exists())
+        run.check(
+            "the binary is newer than the source",
+            binary.stat().st_mtime >= newest,
+            "run cargo build --bin traits",
+        )
+    run.check("python is 3.9 or newer", sys.version_info >= (3, 9), sys.version.split()[0])
+    run.check("git is available", shutil.which("git") is not None)
+    run.check("the repository root is a Cargo crate", (REPO_ROOT / "Cargo.toml").is_file() and (REPO_ROOT / "src" / "main.rs").is_file())
+
+    fixture = new_fixture(run.run_id, "doctor")
+    client: McpClient | None = None
+    try:
+        seed_check_fixture(fixture, mock.url)
+        env = fixture_env(fixture)
+        live = run.command([binary, "config", "check", "--live"], fixture, env, timeout=30)
+        run.check("doctor: live config check", live["exitCode"] == 0 and "classify mock" in live["stdout"] and "generate mock" in live["stdout"], live["stdout"] + live["stderr"])
+        check = run.command([binary, "check", "example.ts"], fixture, env)
+        run.check("doctor: check finds a violation", check["exitCode"] == 1 and "violation use-const" in check["stdout"], check["stdout"])
+        listed = run.command([binary, "trait", "ls"], fixture, env)
+        run.check("doctor: the store is readable", listed["exitCode"] == 0 and "use-const" in listed["stdout"], listed["stdout"])
+
+        client = McpClient(fixture, env)
+        init = client.initialize()
+        run.check("doctor: MCP initializes", init.get("serverInfo", {}).get("name") == "traits", json.dumps(init))
+        tools = client.request("tools/list", {})
+        run.check("doctor: MCP lists both tools", [tool.get("name") for tool in tools.get("tools", [])] == ["derive_trait", "check_traits"], json.dumps(tools))
+        client.save(run.dir / "doctor-mcp.jsonl")
+        exit_code = client.stop()
+        client = None
+        run.check("doctor: MCP exits cleanly", exit_code == 0, str(exit_code))
+        run.write_json(
+            "doctor.json",
+            {
+                "binary": str(binary),
+                "expectedVersion": f"traits {cargo_version()}",
+                "repoRoot": str(REPO_ROOT),
+                "live": live,
+                "check": check,
+                "listed": listed,
+            },
+        )
+    finally:
+        if client is not None:
+            client.stop()
+        shutil.rmtree(fixture, ignore_errors=True)
+
+
+FEATURE_FUNCTIONS = {
+    "setup": feature_setup,
+    "store": feature_store,
+    "check": feature_check,
+    "mcp-check": feature_mcp_check,
+    "mcp-derive": feature_mcp_derive,
+}
+
+
+def run_feature(run_id: str, feature: str) -> dict[str, Any]:
+    run = Run(run_id, feature)
+    try:
+        with MockProvider() as mock:
+            FEATURE_FUNCTIONS[feature](run, mock)
+    except Exception as error:
+        run.check("feature completed", False, f"{type(error).__name__}: {error}")
+    summary = run.close()
+    return summary
+
+
+def run_doctor(run_id: str) -> dict[str, Any]:
+    run = Run(run_id, "doctor")
+    try:
+        with MockProvider() as mock:
+            feature_doctor(run, mock)
+    except Exception as error:
+        run.check("doctor completed", False, f"{type(error).__name__}: {error}")
+    summary = run.close()
+    return summary
+
+
+def cleanup(run_id: str | None, remove_all: bool) -> int:
+    if remove_all:
+        if TMP_ROOT.exists():
+            shutil.rmtree(TMP_ROOT)
+        print(f"Removed {TMP_ROOT}")
+        print(f"Kept evidence under {ARTIFACT_ROOT}")
+        return 0
+    if not run_id:
+        raise SystemExit("Pass --run-id or --all")
+    path = TMP_ROOT / safe_run_id(run_id)
+    if path.exists():
+        shutil.rmtree(path)
+        print(f"Removed {path}")
+    else:
+        print(f"No fixtures at {path}")
+    print(f"Kept evidence under {ARTIFACT_ROOT / run_id}")
+    return 0
+
+
+def print_summary(summary: dict[str, Any]) -> None:
+    status = "ok" if summary["ok"] else "FAIL"
+    print(f"{summary['feature']:<12} {status:<5} {summary['artifacts']}")
+    for failure in summary["failures"]:
+        print(f"  {failure['check']}: {failure['detail']}")
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    doctor_parser = subparsers.add_parser("doctor", help="Check build, fixture, CLI, and MCP prerequisites")
+    doctor_parser.add_argument("--run-id", default=default_run_id())
+
+    run_parser = subparsers.add_parser("run", help="Drive one feature or all mapped features")
+    run_parser.add_argument("feature", choices=(*FEATURES, "all"))
+    run_parser.add_argument("--run-id", default=default_run_id())
+
+    cleanup_parser = subparsers.add_parser("cleanup", help="Remove disposable fixtures but keep evidence")
+    cleanup_parser.add_argument("--run-id")
+    cleanup_parser.add_argument("--all", action="store_true")
+
+    args = parser.parse_args(argv)
+    if args.command == "cleanup":
+        return cleanup(args.run_id, args.all)
+
+    run_id = safe_run_id(args.run_id)
+    print(f"traits verification {run_id}")
+    if args.command == "doctor":
+        summary = run_doctor(run_id)
+        print_summary(summary)
+        return 0 if summary["ok"] else 1
+
+    summaries: list[dict[str, Any]] = []
+    if args.feature == "all":
+        summaries.append(run_doctor(run_id))
+        for feature in FEATURES:
+            summaries.append(run_feature(run_id, feature))
+    else:
+        summaries.append(run_feature(run_id, args.feature))
+
+    aggregate = {
+        "runId": run_id,
+        "ok": all(summary["ok"] for summary in summaries),
+        "features": {summary["feature"]: summary["ok"] for summary in summaries},
+        "artifacts": str(ARTIFACT_ROOT / run_id),
+    }
+    target = ARTIFACT_ROOT / run_id / "summary.json"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(aggregate, indent=2) + "\n", encoding="utf-8")
+    for summary in summaries:
+        print_summary(summary)
+    print(f"result: {'pass' if aggregate['ok'] else 'fail'}")
+    print(f"artifacts: {target}")
+    return 0 if aggregate["ok"] else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

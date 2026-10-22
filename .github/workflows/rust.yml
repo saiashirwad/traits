@@ -17,3 +17,7 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test
+      - run: cargo build --bin traits
+      - run: python3 -m py_compile .opencode/skills/verify-traits/control-traits
+      - run: test -f .opencode/skills/verify-traits/SKILL.md
+      - run: test -f .opencode/skills/verify-traits/features/README.md
