@@ -133,7 +133,8 @@ pub fn resolve_includes(config: &Config, includes: &[String]) -> Result<Vec<Path
             .git_ignore(false)
             .git_global(false)
             .git_exclude(false)
-            .follow_links(true);
+            .follow_links(true)
+            .sort_by_file_name(|a, b| a.cmp(b));
         builder.filter_entry(move |entry| {
             if entry.depth() == 0 {
                 return true;
